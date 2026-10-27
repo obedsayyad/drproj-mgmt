@@ -33,7 +33,17 @@
     owner: root
     group: root
     mode: "0700"
-  loop: ["{{ app_dir }}", "{{ app_dir }}/certs"]
+  loop: ["{{ app_dir }}", "{{ app_dir }}/certs", "{{ app_dir }}/ca"]
+  become: true
+  tags: [app, config]
+
+- name: Distribute the Supabase root CA (public certificate, read from the controller)
+  ansible.builtin.copy:
+    src: "{{ app_supabase_ca_src }}"
+    dest: "{{ app_dir }}/ca/supabase-root-2021.crt"
+    owner: root
+    group: root
+    mode: "0644"
   become: true
   tags: [app, config]
 

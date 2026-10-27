@@ -1,0 +1,4 @@
+---
+# The fixed primary runs the demo build with its own identity (docs/11 DEPLOY-PRIMARY).
+instance_id: primary
+app_demo_mode: true

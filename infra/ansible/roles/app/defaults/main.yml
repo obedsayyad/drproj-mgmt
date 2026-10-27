@@ -15,3 +15,5 @@ app_db_pool_max: 2
 app_ready_retries: 30
 app_ready_delay: 5
 app_container: drproj-app-relief-1
+app_demo_mode: false
+app_supabase_ca_src: /etc/drproj/ca/supabase-root-2021.crt

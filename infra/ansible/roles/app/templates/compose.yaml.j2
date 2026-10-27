@@ -21,9 +21,12 @@ services:
       APP_METRICS_PORT: 9464
       APP_TLS_CERT_FILE: /run/tls/app.crt
       APP_TLS_KEY_FILE: /run/tls/app.key
+      # Supabase's pooler chain is not in Node's bundled roots; the CA file is distributed by Ansible (DB-1).
+      NODE_EXTRA_CA_CERTS: /etc/drproj/ca/supabase-root-2021.crt
     volumes:
       - ./certs/app.crt:/run/tls/app.crt:ro
       - ./certs/app.key:/run/tls/app.key:ro
+      - ./ca/supabase-root-2021.crt:/etc/drproj/ca/supabase-root-2021.crt:ro
     healthcheck:
       test: ["CMD", "node", "-e", "require('https').get({host:'127.0.0.1',port:8443,path:'/health/live',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
