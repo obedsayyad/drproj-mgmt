@@ -1,0 +1,12 @@
+---
+name: wait_lease
+pack: cdr
+description: "Wait for the capacity lease (queue behind the holder; ends early when the operation was superseded)."
+runner_type: python-script
+entry_point: wait_lease.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}
+  timeout_seconds: {type: integer, default: 420}
+  poll_seconds: {type: integer, default: 5}

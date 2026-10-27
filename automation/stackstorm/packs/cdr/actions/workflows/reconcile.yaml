@@ -1,0 +1,200 @@
+version: 1.0
+description: >
+  Reconcile (60 s timer and startup): open the reconcile operation, settle a lease-store outage, take the lease. A live holder means a read-only observe pass and a no-op (lease_held); otherwise adopt live executions, resume or interrupt dead ones (an expired lease is taken over only here), resolve held slots and orphans by provider tag scan (never deleting), release, then re-dispatch resumed operations.
+input:
+  - app_key: relief
+vars:
+  - operation_id: ''
+  - generation: 0
+  - previous_holder: ''
+  - simulated: true
+  - adapter_mode: ''
+  - noop_reason: ''
+  - error: {}
+  - summary: {}
+  - resumes: []
+tasks:
+  open:
+    action: cdr.open_operation
+    input:
+      kind: reconcile
+      source: timer
+      fingerprint: <% 'reconcile:' + ctx().st2.action_execution_id %>
+      event_name: reconcile.requested
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - operation_id: <% result().result.operation_id %>
+        do: adapter
+      - when: <% failed() %>
+        do: control_down
+  control_down:
+    action: cdr.control_state
+    input:
+      mode: down
+    next:
+      - when: <% completed() %>
+        do: fail
+  adapter:
+    action: cdr.adapter_info
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - simulated: <% result().result.simulated %>
+          - adapter_mode: <% result().result.adapter_mode %>
+        do: start
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+      adapter_mode: <% ctx().adapter_mode %>
+    next:
+      - when: <% succeeded() %>
+        do: recover
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  recover:
+    action: cdr.control_state
+    input:
+      mode: recover
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: acquire
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  acquire:
+    action: cdr.acquire_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+          - previous_holder: <% result().result.previous_holder or '' %>
+        do: pass
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - noop_reason: lease_held
+        do: observe
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  observe:
+    action: cdr.reconcile_pass
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: 0
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - summary: <% result().result %>
+        do: noop_no_lease
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  pass:
+    action: cdr.reconcile_pass
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      previous_holder: <% ctx().previous_holder %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - summary: <% result().result %>
+          - resumes: <% result().result.resumes %>
+        do: verifying
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: reconcile pass complete
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: <% ctx().summary %>
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and len(ctx().resumes) > 0 %>
+        do: dispatch
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
+  dispatch:
+    action: cdr.dispatch
+    input:
+      runs: <% ctx().resumes %>
+  noop_no_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: no action - lease_held (read-only observe pass)
+      outcome: {noop_reason: lease_held, adapter: <% ctx().adapter_mode %>, observed: <% ctx().summary %>}
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: <% ctx().error %>
+      step: workflow_error
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

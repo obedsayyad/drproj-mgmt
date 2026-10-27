@@ -1,0 +1,13 @@
+---
+# One capacity-changing workflow per application at a time (the DB lease is the authority; this keeps st2 from
+# starting a second run that would only wait on it). One policy per capacity kind, all keyed on app_key.
+name: capacity_guard.scale_out
+description: At most one running cdr.scale_out per app_key; further runs are delayed, not dropped.
+enabled: true
+resource_ref: cdr.scale_out
+policy_type: action.concurrency.attr
+parameters:
+  action: delay
+  threshold: 1
+  attributes:
+    - app_key

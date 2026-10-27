@@ -1,0 +1,10 @@
+---
+- name: Validate and reload sshd
+  ansible.builtin.command: sshd -t
+  changed_when: true
+  notify: Reload sshd
+
+- name: Reload sshd
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded

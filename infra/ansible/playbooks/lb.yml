@@ -1,0 +1,8 @@
+---
+# Scaffold (P6): the role reports not_implemented until then.
+- name: Configure the lb host
+  hosts: lb
+  become: true
+  roles:
+    - role: lb
+      tags: [lb]

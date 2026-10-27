@@ -1,0 +1,8 @@
+---
+name: next_elastic_provider
+pack: cdr
+description: Pick the provider for the next elastic VM (alternate, skip unavailable or at cap). provider null = none qualifies.
+runner_type: python-script
+entry_point: next_elastic_provider.py
+enabled: true
+parameters: {}

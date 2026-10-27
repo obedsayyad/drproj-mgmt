@@ -1,0 +1,9 @@
+---
+name: capacity_gate
+pack: cdr
+description: Recheck maintenance, cooldown and metrics freshness before a scale-out; proceed=false carries the noop_reason.
+runner_type: python-script
+entry_point: capacity_gate.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}

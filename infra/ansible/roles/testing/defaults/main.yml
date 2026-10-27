@@ -1,0 +1,3 @@
+---
+# Placeholder so defaults/ exists; the testing role is a scaffold until P8.
+testing_phase: "P8"

@@ -1,0 +1,8 @@
+---
+# The four self-hosted fixed hosts are operated as root: an approved deviation from the `drproj` deploy-user design (docs/07, "bootstrap").
+# Root login stays enabled; the bootstrap role skips user/sudo creation, manages /root/.ssh only and writes no sshd hardening.
+# cloud_app hosts are not in this group and keep the role defaults (deploy user drproj).
+bootstrap_deploy_user: root
+bootstrap_harden_sshd: false
+# Enable only after key login is proven on every fixed host (not this run).
+bootstrap_disable_password_auth: false

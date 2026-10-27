@@ -1,0 +1,5 @@
+---
+- name: Fail because the mgmt role is not implemented yet (P6/P7)
+  ansible.builtin.fail:
+    msg: "not_implemented: the mgmt role lands in P6/P7 (docs/11)"
+  tags: [mgmt, not_implemented]

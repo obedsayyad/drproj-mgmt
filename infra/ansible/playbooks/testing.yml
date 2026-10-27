@@ -1,0 +1,8 @@
+---
+# Scaffold (P8): the role reports not_implemented until then.
+- name: Configure the testing host
+  hosts: testing
+  become: true
+  roles:
+    - role: testing
+      tags: [testing]

@@ -1,0 +1,14 @@
+---
+name: mark_slot_uncertain
+pack: cdr
+description: Hold a slot as held_uncertain (counted against the cap).
+runner_type: python-script
+entry_point: mark_slot_uncertain.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  slot_key: {type: string, required: true}
+  slot_generation: {type: integer, required: true}
+  reason: {type: string, required: true}

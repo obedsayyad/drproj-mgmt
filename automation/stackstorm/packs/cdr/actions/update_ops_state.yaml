@@ -1,0 +1,20 @@
+---
+name: update_ops_state
+pack: cdr
+description: Advance an operation (status/step) and append the matching operation_events row.
+runner_type: python-script
+entry_point: update_ops_state.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  event_type: {type: string, required: true}
+  step: {type: string, required: true}
+  status:
+    type: string
+    enum: [queued, running, waiting, verifying, paused, reconciling, cancelling, cancelled, succeeded, failed]
+  message: {type: string}
+  outcome: {type: object, description: "Set on terminal states; a no-op success needs noop_reason."}
+  source: {type: string, default: automation, enum: [dashboard, automation, reconciliation, alertmanager, timer]}
+  execution_id: {type: string}
+  adapter_mode: {type: string, enum: [real, simulation]}

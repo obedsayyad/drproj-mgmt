@@ -1,0 +1,11 @@
+---
+name: supersede_queued
+pack: cdr
+description: "Turn queued operations of one kind into succeeded no-ops (superseded by this operation)."
+runner_type: python-script
+entry_point: supersede_queued.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  kind: {type: string, default: scale_in, enum: [scale_out, scale_in, primary_failure, standby_repair, activate_standby]}

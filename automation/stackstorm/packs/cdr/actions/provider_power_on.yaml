@@ -1,0 +1,13 @@
+---
+name: provider_power_on
+pack: cdr
+description: "Power on the VM of a standby slot through the provider adapter (assert_lease immediately before the call)."
+runner_type: python-script
+entry_point: provider_power_on.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  resource_id: {type: string, required: true}

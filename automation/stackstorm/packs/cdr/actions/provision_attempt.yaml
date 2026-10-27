@@ -1,0 +1,14 @@
+---
+name: provision_attempt
+pack: cdr
+description: One provisioning attempt on one reserved slot (inner workflow; not an operation kind).
+runner_type: orquesta
+entry_point: workflows/provision_attempt.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  slot_key: {type: string, required: true}
+  slot_generation: {type: integer, required: true}
+  attempt: {type: integer, required: true}

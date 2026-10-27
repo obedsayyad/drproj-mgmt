@@ -1,0 +1,13 @@
+---
+name: record_alert
+pack: cdr
+description: Record Alertmanager notifications in ops.processed_events (source=alertmanager). Recording only.
+runner_type: python-script
+entry_point: record_alert.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  body:
+    type: object
+    description: Alertmanager webhook payload (version 4).
+    required: true

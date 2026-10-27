@@ -1,0 +1,83 @@
+---
+# Rotation step 4: promote the new CA and drop the old one from the bundle. Guarded twice: explicit confirmation, and every leaf must
+# already verify against the new CA (checked on each application host before the management VM changes anything).
+- name: Require explicit confirmation
+  ansible.builtin.assert:
+    that: ca_confirm_drop_old | bool
+    fail_msg: "pass -e ca_confirm_drop_old=true once all leaves and probes are healthy on the new CA"
+    quiet: true
+
+- name: Check this host's leaf against the new CA
+  when: "'cloud_app' in group_names or 'primary' in group_names"
+  block:
+    - name: Read the new CA certificate
+      ansible.builtin.slurp:
+        src: "{{ ca_dir }}/{{ ca_new_cert_name }}"
+      delegate_to: "{{ ca_mgmt_host }}"
+      become: true
+      register: ca_new_crt
+    - name: Stage the new CA certificate on the host
+      ansible.builtin.copy:
+        content: "{{ ca_new_crt.content | b64decode }}"
+        dest: "{{ ca_leaf_dir }}/ca-new-check.crt"
+        owner: root
+        group: root
+        mode: "0600"
+      become: true
+    - name: Verify the leaf was issued by the new CA
+      ansible.builtin.command: "openssl verify -CAfile {{ ca_leaf_dir }}/ca-new-check.crt {{ ca_leaf_dir }}/app.crt"
+      changed_when: false
+      become: true
+    - name: Remove the staged certificate
+      ansible.builtin.file:
+        path: "{{ ca_leaf_dir }}/ca-new-check.crt"
+        state: absent
+      become: true
+
+- name: Promote the new CA on the management VM
+  when: inventory_hostname == ca_mgmt_host
+  become: true
+  block:
+    - name: Create the retired directory
+      ansible.builtin.file:
+        path: "{{ ca_dir }}/retired"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+    - name: Retire the old key and certificate (kept in retired/ for rollback until the operator deletes them)
+      ansible.builtin.command:
+        argv: [mv, "{{ ca_dir }}/{{ item.src }}", "{{ ca_dir }}/retired/{{ item.dest }}"]
+        removes: "{{ ca_dir }}/{{ item.src }}"
+      loop:
+        - {src: "{{ ca_key_name }}", dest: "{{ ca_key_name }}.old"}
+        - {src: "{{ ca_cert_name }}", dest: "{{ ca_cert_name }}.old"}
+      loop_control:
+        label: "{{ item.src }}"
+    - name: Move the new CA into place
+      ansible.builtin.command:
+        argv: [mv, "{{ ca_dir }}/{{ item.src }}", "{{ ca_dir }}/{{ item.dest }}"]
+        removes: "{{ ca_dir }}/{{ item.src }}"
+      loop:
+        - {src: "{{ ca_new_key_name }}", dest: "{{ ca_key_name }}"}
+        - {src: "{{ ca_new_cert_name }}", dest: "{{ ca_cert_name }}"}
+      loop_control:
+        label: "{{ item.dest }}"
+    - name: Re-assert the CA key mode
+      ansible.builtin.file:
+        path: "{{ ca_dir }}/{{ ca_key_name }}"
+        owner: root
+        group: root
+        mode: "0400"
+    - name: Rebuild the bundle with the new CA only
+      ansible.builtin.copy:
+        src: "{{ ca_dir }}/{{ ca_cert_name }}"
+        dest: "{{ ca_dir }}/{{ ca_bundle_name }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Deploy the new-only bundle to this verifier
+  when: "'management' in group_names or 'lb' in group_names"
+  ansible.builtin.include_tasks: distribute_bundle.yml

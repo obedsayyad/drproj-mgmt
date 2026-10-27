@@ -1,0 +1,11 @@
+---
+name: policy_rollback
+pack: cdr
+description: "Apply_policy failure path: put the previous policy_version label back (best effort) and mark the pending version failed; the old version stays active."
+runner_type: python-script
+entry_point: policy_rollback.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  error: {type: string, default: ""}

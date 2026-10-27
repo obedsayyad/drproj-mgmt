@@ -1,0 +1,328 @@
+---
+# Bootstrap a fresh self-hosted or cloud host (docs/07 roles). Runs as the bootstrap user (root) on first contact and as the deploy user afterwards.
+# No firewall, VPN or network-policy tasks: network exposure is outside this project's automation (CLAUDE.md hard constraints).
+- name: Check the inputs this role needs
+  ansible.builtin.assert:
+    that:
+      - bootstrap_docker_version is string
+      - bootstrap_docker_version | length > 0
+      - ansible_facts['distribution'] in ['Debian', 'Ubuntu']
+      - ansible_facts['distribution'] != 'Debian' or ansible_facts['distribution_major_version'] == '12'
+    fail_msg: "versions.docker must be set in the deployment inputs, and the host must be Debian 12 or Ubuntu"
+    quiet: true
+  tags: [bootstrap, always]
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg, apache2-utils, sudo, openssh-server]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [bootstrap, packages]
+
+# ---- Docker CE, pinned to versions.docker and held so unattended upgrades cannot move it. Repository: download.docker.com/linux/<debian|ubuntu>.
+# Pin format: Ubuntu packages are versioned 5:<v>-1~ubuntu.<rel>~<codename>, Debian 5:<v>-1~debian.<rel>~<codename>; the glob 5:<v>-* matches both.
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  tags: [bootstrap, docker]
+
+- name: Install the Docker apt signing key
+  ansible.builtin.get_url:
+    url: "{{ bootstrap_docker_repo_base }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+    owner: root
+    group: root
+  tags: [bootstrap, docker]
+
+- name: Add the Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }} signed-by=/etc/apt/keyrings/docker.asc]
+      {{ bootstrap_docker_repo_base }} {{ ansible_facts['distribution_release'] }} stable
+    filename: docker
+    state: present
+  tags: [bootstrap, docker]
+
+- name: Install the pinned Docker CE packages
+  ansible.builtin.apt:
+    name:
+      - "docker-ce={{ bootstrap_docker_pin }}"
+      - "docker-ce-cli={{ bootstrap_docker_pin }}"
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    allow_downgrade: true
+    update_cache: true
+  tags: [bootstrap, docker]
+
+- name: Hold the Docker CE packages at the pinned version
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: [docker-ce, docker-ce-cli]
+  tags: [bootstrap, docker]
+
+- name: Enable and start Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+  tags: [bootstrap, docker]
+
+# ---- deploy user: created and given the approved public key BEFORE any root-login hardening
+- name: Create the deploy user
+  when: bootstrap_deploy_user != 'root'
+  ansible.builtin.user:
+    name: "{{ bootstrap_deploy_user }}"
+    shell: /bin/bash
+    groups: docker
+    append: true
+    create_home: true
+  tags: [bootstrap, user]
+
+- name: Allow the deploy user passwordless sudo
+  when: bootstrap_deploy_user != 'root'
+  ansible.builtin.copy:
+    content: "{{ bootstrap_deploy_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    dest: "/etc/sudoers.d/90-{{ bootstrap_deploy_user }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  tags: [bootstrap, user]
+
+# Fixed hosts: the approved key's public half is read on the controller and installed for the deploy user (root: /root/.ssh only).
+- name: Install the approved key for the deploy user from the controller
+  when: not (bootstrap_authorize_from_connecting_user | bool)
+  tags: [bootstrap, user]
+  block:
+    - name: Read the public half of the approved SSH key on the controller
+      ansible.builtin.set_fact:
+        bootstrap_public_key: "{{ lookup('ansible.builtin.file', bootstrap_ssh_key_path ~ '.pub') }}"
+      delegate_to: localhost
+      become: false
+      no_log: true
+    - name: Install the approved key for the deploy user
+      ansible.posix.authorized_key:
+        user: "{{ bootstrap_deploy_user }}"
+        key: "{{ bootstrap_public_key }}"
+        state: present
+        exclusive: false
+
+# Cloud VMs: Terraform already installed the cloud key for the first-contact user, so no .pub file is needed on the controller.
+# The deploy user receives that same authorized_keys file.
+- name: Authorize the deploy user from the first-contact user's authorized_keys
+  when: bootstrap_authorize_from_connecting_user | bool
+  tags: [bootstrap, user]
+  block:
+    - name: Create the deploy user's .ssh directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_deploy_home }}/.ssh"
+        state: directory
+        owner: "{{ bootstrap_deploy_user }}"
+        group: "{{ bootstrap_deploy_user }}"
+        mode: "0700"
+    - name: Copy the first-contact user's authorized_keys to the deploy user
+      ansible.builtin.copy:
+        src: "{{ ansible_facts['user_dir'] }}/.ssh/authorized_keys"
+        dest: "{{ bootstrap_deploy_home }}/.ssh/authorized_keys"
+        remote_src: true
+        owner: "{{ bootstrap_deploy_user }}"
+        group: "{{ bootstrap_deploy_user }}"
+        mode: "0600"
+
+# ---- directories (docs/08: .env 0600 in 0700 directories; check with scripts/check-perms.sh)
+- name: Create the project directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ bootstrap_deploy_user }}"
+    group: "{{ bootstrap_deploy_user }}"
+    mode: "0700"
+  loop:
+    - "{{ bootstrap_config_dir }}"
+    - "{{ bootstrap_config_dir }}/secrets"
+  tags: [bootstrap, dirs]
+
+# ---- management VM: 2 GB swapfile, swappiness 10 (docs/07 memory plan)
+- name: Configure swap on the management VM
+  when: "'management' in group_names"
+  tags: [bootstrap, swap]
+  block:
+    - name: Allocate the swapfile
+      ansible.builtin.command: "dd if=/dev/zero of=/swapfile bs=1M count={{ bootstrap_swap_size_mb }} status=none"
+      args:
+        creates: /swapfile
+    - name: Check for the swapfile
+      ansible.builtin.stat:
+        path: /swapfile
+      register: bootstrap_swapfile
+    - name: Restrict the swapfile
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        group: root
+        mode: "0600"
+      when: bootstrap_swapfile.stat.exists or not ansible_check_mode
+    - name: Format the swapfile if it is not swap yet
+      ansible.builtin.command: mkswap /swapfile
+      register: bootstrap_mkswap
+      changed_when: bootstrap_mkswap.rc == 0
+      when: ansible_facts['swaptotal_mb'] | int == 0
+    - name: Persist the swapfile in fstab
+      ansible.posix.mount:
+        src: /swapfile
+        path: none
+        fstype: swap
+        opts: sw
+        state: present
+    - name: Activate the swapfile
+      ansible.builtin.command: swapon /swapfile
+      register: bootstrap_swapon
+      changed_when: bootstrap_swapon.rc == 0
+      when: ansible_facts['swaptotal_mb'] | int == 0
+    - name: Set swappiness
+      ansible.posix.sysctl:
+        name: vm.swappiness
+        value: "{{ bootstrap_swappiness }}"
+        sysctl_file: /etc/sysctl.d/90-drproj-swap.conf
+        state: present
+        reload: true
+
+# ---- application hosts: node_exporter web config (TLS + basic auth). node_exporter itself runs in the app Compose stack.
+- name: Prepare the node_exporter web config on application hosts
+  when: "'cloud_app' in group_names or 'primary' in group_names"
+  tags: [bootstrap, node_exporter]
+  block:
+    - name: Create the application stack directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_config_dir }}/app"
+        state: directory
+        owner: "{{ bootstrap_deploy_user }}"
+        group: "{{ bootstrap_deploy_user }}"
+        mode: "0700"
+    - name: Check whether the web config exists
+      ansible.builtin.stat:
+        path: "{{ bootstrap_config_dir }}/app/node-exporter-web-config.yml"
+      register: bootstrap_web_config
+    - name: Check whether the generated basic-auth password exists
+      ansible.builtin.stat:
+        path: "{{ bootstrap_node_exporter_password_file }}"
+      register: bootstrap_password_file
+    - name: Generate the basic-auth password on the host (0600, secrets directory only)
+      ansible.builtin.shell: umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > "$PW_FILE"
+      environment:
+        PW_FILE: "{{ bootstrap_node_exporter_password_file }}"
+      when: not bootstrap_password_file.stat.exists or (bootstrap_rotate_node_exporter_password | default(false) | bool)
+      changed_when: true
+      no_log: true
+    - name: Pin the password file mode and owner
+      ansible.builtin.file:
+        path: "{{ bootstrap_node_exporter_password_file }}"
+        owner: "{{ bootstrap_deploy_user }}"
+        group: "{{ bootstrap_deploy_user }}"
+        mode: "0600"
+      when: bootstrap_password_file.stat.exists or not ansible_check_mode
+    - name: Hash the basic-auth password on the host (stdin only, never argv or logs)
+      ansible.builtin.shell: htpasswd -niBC 12 prometheus < "$PW_FILE"
+      environment:
+        PW_FILE: "{{ bootstrap_node_exporter_password_file }}"
+      register: bootstrap_htpasswd
+      changed_when: false
+      check_mode: false
+      no_log: true
+      when: >-
+        (not bootstrap_web_config.stat.exists or (bootstrap_rotate_node_exporter_password | default(false) | bool))
+        and (bootstrap_password_file.stat.exists or not ansible_check_mode)
+    - name: Render the web config (bcrypt hash only; mode 0644 inside the 0700 directory because the container runs as nobody)
+      ansible.builtin.template:
+        src: node-exporter-web-config.yml.j2
+        dest: "{{ bootstrap_config_dir }}/app/node-exporter-web-config.yml"
+        owner: "{{ bootstrap_deploy_user }}"
+        group: "{{ bootstrap_deploy_user }}"
+        mode: "0644"
+      vars:
+        bootstrap_basic_auth_hash: "{{ (bootstrap_htpasswd.stdout | trim).split(':', 1)[1] }}"
+      no_log: true
+      when: bootstrap_htpasswd is not skipped
+
+# ---- management VM only: the controller's own Ansible venv (same pins as the runner image). Tag ansible_venv; re-runs are no-ops.
+- name: Provision the Ansible venv on the management VM
+  when: "'management' in group_names"
+  tags: [bootstrap, ansible_venv]
+  block:
+    - name: Install python3-venv
+      ansible.builtin.apt:
+        name: [python3-venv, python3-pip, rsync]
+        state: present
+    - name: Create the venv and install the pinned ansible-core
+      ansible.builtin.pip:
+        name: "ansible-core=={{ bootstrap_ansible_core_version }}"
+        virtualenv: "{{ bootstrap_ansible_venv }}"
+        virtualenv_command: python3 -m venv
+    - name: Install the pinned collections (infra/ansible/requirements.yml mirrors automation/runner/requirements.yml)
+      ansible.builtin.command:
+        argv:
+          - "{{ bootstrap_ansible_venv }}/bin/ansible-galaxy"
+          - collection
+          - install
+          - -p
+          - "{{ bootstrap_ansible_venv }}/collections"
+          - -r
+          - "{{ playbook_dir }}/../requirements.yml"
+      register: bootstrap_collections
+      changed_when: "'Installing' in bootstrap_collections.stdout"
+      check_mode: false
+
+# ---- last: SSH hardening, only once the deploy user's key is proven to log in. Skipped for root-operated fixed hosts (root login stays enabled).
+- name: Harden sshd
+  when: (bootstrap_harden_sshd | bool or bootstrap_disable_password_auth | bool)
+  tags: [bootstrap, sshd]
+  block:
+    - name: Verify key login as the deploy user before touching sshd
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - "{{ bootstrap_ssh_key_path }}"
+          - -o
+          - BatchMode=yes
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - "StrictHostKeyChecking={{ bootstrap_host_key_policy }}"
+          - -o
+          - ConnectTimeout=10
+          - "{{ bootstrap_deploy_user }}@{{ ansible_host | default(inventory_hostname) }}"
+          - "true"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      register: bootstrap_key_check
+    - name: Confirm the main sshd config reads the drop-in directory
+      ansible.builtin.command: grep -Eq '^Include[[:space:]]+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config
+      changed_when: false
+    - name: Forbid root password login
+      when: bootstrap_harden_sshd | bool and bootstrap_deploy_user != 'root'
+      ansible.builtin.copy:
+        content: "PermitRootLogin prohibit-password\n"
+        dest: /etc/ssh/sshd_config.d/10-drproj.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Validate and reload sshd
+    - name: Disable password authentication
+      when: bootstrap_disable_password_auth | bool
+      ansible.builtin.copy:
+        content: "PasswordAuthentication no\n"
+        dest: /etc/ssh/sshd_config.d/11-drproj-auth.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Validate and reload sshd

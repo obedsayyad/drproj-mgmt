@@ -1,0 +1,27 @@
+---
+# Copy the management VM's trust bundle to this verifier host. Verifier services (HAProxy P6, Prometheus/blackbox and the management stack
+# P7) reload it in their own roles; this task only places the file.
+- name: Read the trust bundle from the management VM
+  ansible.builtin.slurp:
+    src: "{{ ca_dir }}/{{ ca_bundle_name }}"
+  register: ca_bundle
+  delegate_to: "{{ ca_mgmt_host }}"
+  become: true
+
+- name: Create the trust directory
+  ansible.builtin.file:
+    path: "{{ ca_trust_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install the trust bundle
+  ansible.builtin.copy:
+    content: "{{ ca_bundle.content | b64decode }}"
+    dest: "{{ ca_trust_dir }}/{{ ca_bundle_name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true

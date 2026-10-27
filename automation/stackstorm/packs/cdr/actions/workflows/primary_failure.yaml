@@ -1,0 +1,374 @@
+version: 1.0
+description: >
+  Primary failure: supersede queued scale-ins, record the incident, take the lease, apply SIMULATED routing (primary maintenance, warm standby active), then ensure exactly ONE elastic VM (resume or reuse an existing one, else the non-warm provider, the warm provider only as fallback). A resumed run (reconcile re-dispatch) continues in the slot it already holds.
+input:
+  - operation_id
+  - app_key: relief
+  - resume: false
+  - first_attempt: 1
+  - attempts_done: {}
+vars:
+  - generation: 0
+  - simulated: true
+  - adapter_mode: ''
+  - noop_reason: ''
+  - error: {}
+  - provider: ''
+  - slot_key: ''
+  - slot_generation: 0
+  - resource_id: ''
+  - reused: {}
+  - ensure_tries: 0
+tasks:
+  adapter:
+    action: cdr.adapter_info
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - simulated: <% result().result.simulated %>
+          - adapter_mode: <% result().result.adapter_mode %>
+        do: start
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+      adapter_mode: <% ctx().adapter_mode %>
+    next:
+      - when: <% succeeded() %>
+        do: supersede
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  supersede:
+    action: cdr.supersede_queued
+    input:
+      operation_id: <% ctx().operation_id %>
+      kind: scale_in
+    next:
+      - when: <% succeeded() %>
+        do: incident
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  incident:
+    action: cdr.open_incident
+    input:
+      fingerprint: primary.unhealthy:relief
+      severity: critical
+      source: automation
+      description: the primary failed its health checks; failover in progress (no scale-in while it lasts)
+      resources: <% ['primary'] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: acquire
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  acquire:
+    action: cdr.wait_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+        do: step_lease
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - noop_reason: <% 'lease_' + result().result.reason %>
+        do: noop_no_lease
+      - when: <% failed() %>
+        publish:
+          - noop_reason: lease_unavailable
+        do: noop_no_lease
+  step_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: lease_acquired
+      status: running
+      message: <% 'capacity lease held at generation ' + str(ctx().generation) %>
+    next:
+      - when: <% succeeded() %>
+        do: route_primary
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  route_primary:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: primary
+      mode: maint
+    next:
+      - when: <% succeeded() %>
+        do: route_warm
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  route_warm:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: warm
+      mode: active
+    next:
+      - when: <% succeeded() %>
+        do: ensure
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  ensure:
+    action: cdr.failover_target
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+    next:
+      - when: <% succeeded() and result().result.action in list('resume', 'reserved') %>
+        publish:
+          - provider: <% result().result.provider %>
+          - slot_key: <% result().result.slot_key %>
+          - slot_generation: <% result().result.slot_generation %>
+        do: step_reserved
+      - when: <% succeeded() and result().result.action = 'reuse' %>
+        publish:
+          - reused: <% result().result %>
+        do: verifying
+      - when: <% succeeded() and result().result.action = 'wait' and ctx().ensure_tries < 4 %>
+        publish:
+          - ensure_tries: <% ctx().ensure_tries + 1 %>
+        do: ensure
+      - when: <% succeeded() and result().result.action = 'wait' %>
+        publish:
+          - noop_reason: elastic_in_flight
+        do: noop_release
+      - when: <% succeeded() and result().result.action = 'none' %>
+        publish:
+          - noop_reason: no_capacity
+        do: raise_no_capacity
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  step_reserved:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: elastic_ensured
+      message: <% 'elastic slot ' + ctx().slot_key + ' on ' + ctx().provider %>
+    next:
+      - when: <% succeeded() %>
+        do: provision
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  provision:
+    action: cdr.provision_and_deploy
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      first_attempt: <% ctx().first_attempt %>
+      attempts_done: <% ctx().attempts_done %>
+    next:
+      - when: <% succeeded() and result().output.result = 'ready' %>
+        publish:
+          - provider: <% result().output.provider %>
+          - slot_key: <% result().output.slot_key %>
+          - slot_generation: <% result().output.slot_generation %>
+          - resource_id: <% result().output.resource_id %>
+        do: route_elastic
+      - when: <% succeeded() and result().output.result = 'exhausted' %>
+        do: fail_exhausted
+      - when: <% succeeded() and result().output.result = 'uncertain' %>
+        publish:
+          - provider: <% result().output.provider %>
+          - slot_key: <% result().output.slot_key %>
+        do: raise_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  route_elastic:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: <% ctx().slot_key %>
+      mode: active
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: verifying
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  raise_no_capacity:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'failover.no_capacity:' + ctx().operation_id %>
+      severity: critical
+      source: automation
+      description: "primary failure: no provider has capacity for the redundancy VM (caps, unavailable or uncertain slots)"
+      resources: <% ['digitalocean', 'linode'] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: noop_release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: primary out, warm standby active, one elastic VM ensured
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: {provider: <% ctx().provider %>, slot_key: <% ctx().slot_key %>, resource_id: <% ctx().resource_id %>, reused: <% ctx().reused %>, adapter: <% ctx().adapter_mode %>, simulated_routing: <% ctx().simulated %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  fail_exhausted:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.failed
+      step: provision_exhausted
+      status: failed
+      message: provisioning exhausted on both providers
+      outcome: {error: provision_exhausted, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  raise_uncertain:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'provision.uncertain:' + ctx().slot_key %>
+      severity: critical
+      source: automation
+      description: <% 'existence of the VM in ' + ctx().slot_key + ' is unknown; the slot is held and counted until reconcile resolves it' %>
+      resources: <% [ctx().slot_key] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: fail_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  fail_uncertain:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.failed
+      step: held_uncertain
+      status: failed
+      message: slot held as uncertain; no retry and no fallback until reconcile
+      outcome: {error: held_uncertain, slot_key: <% ctx().slot_key %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_release:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_no_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: <% ctx().error %>
+      step: workflow_error
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

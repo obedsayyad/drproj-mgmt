@@ -1,0 +1,19 @@
+# One receiver: the StackStorm webhook, authenticated with an St2-Api-Key read from a file (docs/08).
+# The st2 rule `cdr.cdr_alert` (pack cdr) receives it: cdr.alert_intent records the alert and, from P4.3, maps its cdr_event label to a capacity intent.
+# Timing follows policy alerts.* (docs/10): group_by [alertname, instance], group_wait 0, group_interval 5s, repeat 60s.
+route:
+  receiver: st2
+  group_by: [alertname, instance]
+  group_wait: 0s
+  group_interval: 5s
+  repeat_interval: 60s
+
+receivers:
+  - name: st2
+    webhook_configs:
+      - url: http://st2api:9101/v1/webhooks/cdr_alert
+        send_resolved: true
+        http_config:
+          http_headers:
+            St2-Api-Key:
+              files: [/run/secrets/st2_api_key]

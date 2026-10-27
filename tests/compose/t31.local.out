@@ -1,0 +1,61 @@
+T31 LOCAL RUN - Docker Desktop on a developer Mac, NOT the management VM
+date: 2026-10-25T10:14:26Z
+--- 1. permissions helper
+PASS check-perms accepts a 0600 .env in a 0700 dir
+PASS check-perms rejects a 0644 .env
+--- 2. compose config validates and meets hardening rules
+ok   mgmt: 22 services (mem_limit, healthcheck, pinned tag, ports, profiles)
+PASS mgmt compose
+ok   mgmt: 23 services (mem_limit, healthcheck, pinned tag, ports, profiles)
+PASS mgmt compose + local overlay
+ok   testing: 1 services (mem_limit, healthcheck, pinned tag, ports, profiles)
+PASS testing compose
+ok   app: 2 services (mem_limit, healthcheck, pinned tag, ports, profiles)
+PASS app compose
+ok   lb: 2 services (mem_limit, healthcheck, pinned tag, ports, profiles)
+PASS lb compose
+--- 3. bring up local Postgres, migrate, seed policy
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+PASS ops image builds (local tag, not pushed)
+PASS localpg healthy
+      ops/0008_processed_events_source.sql
+      app/0001_app_schema.sql
+      app/0002_runtime_readiness_grant.sql
+PASS dr_ops login role created
+    {"msg":"policy version 1 seeded"}
+--- 4. start ops + caddy
+PASS ops and caddy healthy
+--- 5. T31 through Caddy (https://ops.localhost:18443, internal CA)
+PASS GET /api/overview without credentials (200)
+PASS GET /health/live (200)
+PASS POST without credentials (401)
+PASS POST 401 carries WWW-Authenticate: Basic
+PASS POST 401 is issued by Caddy (realm restricted)
+PASS PATCH without credentials (401)
+PASS PATCH 401 carries WWW-Authenticate: Basic
+PASS PATCH 401 is issued by Caddy (realm restricted)
+PASS PUT without credentials (401)
+PASS PUT 401 carries WWW-Authenticate: Basic
+PASS PUT 401 is issued by Caddy (realm restricted)
+PASS DELETE without credentials (401)
+PASS DELETE 401 carries WWW-Authenticate: Basic
+PASS DELETE 401 is issued by Caddy (realm restricted)
+PASS POST with wrong password (401)
+PASS POST with credentials is not 401 (400)
+PASS PATCH with credentials is not 401 (404)
+PASS PUT with credentials is not 401 (404)
+PASS DELETE with credentials is not 401 (404)
+--- 6. defense in depth: the API rejects mutations itself (no Caddy)
+PASS direct POST to ops container without credentials (401)
+--- 7. ops /metrics is internal-only
+    in-container: 200 cdr_policy_active_version 1|cdr_ops_metrics_query_success 1
+PASS /metrics served on 9465 with cdr_* series
+PASS GET /metrics through Caddy returns no metrics series
+PASS ops container publishes no host ports (0)
+--- summary
+passed=34 failed=0
+images: caddy:2.11.7 drproj-operations:local postgres:17.11-alpine
+--- cleanup

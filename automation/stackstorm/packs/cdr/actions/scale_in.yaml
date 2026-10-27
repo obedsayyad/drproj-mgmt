@@ -1,0 +1,10 @@
+---
+name: scale_in
+pack: cdr
+description: "Remove one elastic VM (newest first): refuse during a primary outage, drain (simulated), delete, confirm absence, release the slot."
+runner_type: orquesta
+entry_point: workflows/scale_in.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}

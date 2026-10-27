@@ -1,0 +1,58 @@
+---
+# Initialise the backend CA on the management VM. Idempotent: an existing key or certificate is never replaced.
+- name: Create the CA directory
+  ansible.builtin.file:
+    path: "{{ ca_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+- name: Generate the CA private key
+  ansible.builtin.command:
+    argv: [openssl, genpkey, -algorithm, EC, -pkeyopt, "ec_paramgen_curve:P-256", -out, "{{ ca_dir }}/{{ ca_key_name }}"]
+    creates: "{{ ca_dir }}/{{ ca_key_name }}"
+  become: true
+
+- name: Restrict the CA private key to read-only for root
+  ansible.builtin.file:
+    path: "{{ ca_dir }}/{{ ca_key_name }}"
+    owner: root
+    group: root
+    mode: "0400"
+  become: true
+
+- name: Self-sign the CA certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -new
+      - -key
+      - "{{ ca_dir }}/{{ ca_key_name }}"
+      - -days
+      - "{{ ca_ca_days }}"
+      - -sha256
+      - -subj
+      - /CN=drproj-backend-ca
+      - -addext
+      - basicConstraints=critical,CA:TRUE,pathlen:0
+      - -addext
+      - keyUsage=critical,keyCertSign,cRLSign
+      - -out
+      - "{{ ca_dir }}/{{ ca_cert_name }}"
+    creates: "{{ ca_dir }}/{{ ca_cert_name }}"
+  become: true
+
+- name: Create the trust bundle (the CA alone) if there is none
+  ansible.builtin.copy:
+    src: "{{ ca_dir }}/{{ ca_cert_name }}"
+    dest: "{{ ca_dir }}/{{ ca_bundle_name }}"
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0644"
+  become: true

@@ -1,0 +1,9 @@
+---
+- name: Initialise the backend CA
+  hosts: management
+  become: true
+  roles:
+    - role: ca
+      vars:
+        ca_action: init
+      tags: [ca, ca_init]

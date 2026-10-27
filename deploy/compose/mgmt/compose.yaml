@@ -1,0 +1,396 @@
+# Management VM stack (docs/08). Image tags default to the values in docs/config/deployment-inputs.example.json
+# (versions.*, "unverified until smoke"). mem_limit values are INITIAL ceilings for the 2 vCPU / 4 GB VM and
+# must be measured with a full stack plus a Terraform/restore job (T18); their sum for the always-on services is 3568 MB (3.48 GiB) before swap, leaving ~528 MB of the 4096 MB VM for kernel, page cache and Terraform/Ansible jobs
+# (st2auth stays 192m: 160m was SIGKILLed (137) in the FIX-1 smoke. Ceilings, not expected use; st2 services at 160m sit above the 64-128m levels that were SIGKILLed in the P3.2 smoke but are the tight ones: stream/scheduler/workflowengine/notifier/gc/rules/timers, st2actionrunner 512m; they rely on the 2 GB swap. st2-register (init profile) and restore-test-pg are excluded from the sum.)
+# Named volumes exist only for stateful services. No service publishes a port except Caddy (80/443).
+name: drproj-mgmt
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-st2-common: &st2-common
+  <<: *restart
+  networks: [internal]
+  volumes:
+    - ./stackstorm/st2.docker.conf:/etc/st2/st2.docker.conf:ro
+    - ${MGMT_SECRETS_DIR:-./secrets}/st2.user.conf:/etc/st2/st2.user.conf:ro
+  depends_on:
+    mongo: { condition: service_healthy }
+    rabbitmq: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+# Process-liveness check for st2 workers that have no listening port: PID 1 is the service itself.
+# Real readiness is the ops API's StackStorm probe (/v1/actions with the API key).
+x-st2-proc-health: &st2-proc-health
+  test: ["CMD-SHELL", "grep -q st2 /proc/1/cmdline"]
+  interval: 20s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
+
+services:
+  caddy:
+    <<: *restart
+    image: caddy:${CADDY_TAG:-2.11.7}
+    mem_limit: 64m
+    ports: ["80:80", "443:443"]
+    networks: [edge, internal]
+    environment:
+      OPS_HOST: ${OPS_HOST:-ops.cproj.obed.one}
+      GRAFANA_HOST: ${GRAFANA_HOST:-grafana.cproj.obed.one}
+      ST2_HOST: ${ST2_HOST:-stackstorm.cproj.obed.one}
+      STATS_HOST: ${STATS_HOST:-stats.cproj.obed.one}
+      HAPROXY_STATS_UPSTREAM: ${HAPROXY_STATS_UPSTREAM:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_CA: ${ACME_CA:-https://acme-staging-v02.api.letsencrypt.org/directory}
+      # bcrypt of OPS_OPERATOR_PASSWORD; single-quote it in .env so `$` is not interpolated.
+      OPS_BASIC_AUTH_HASH: ${OPS_BASIC_AUTH_HASH:?set OPS_BASIC_AUTH_HASH (see .env.example)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./snippets.caddy:/etc/caddy/snippets.caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      ops: { condition: service_healthy }
+
+  ops:
+    <<: *restart
+    image: ${OPS_IMAGE:-drproj-operations:local}
+    mem_limit: 160m
+    networks: [internal]
+    environment:
+      SUPABASE_OPS_URL: ${SUPABASE_OPS_URL:?set SUPABASE_OPS_URL}
+      OPS_PORT: 8080
+      OPS_METRICS_PORT: 9465
+      OPS_DB_POOL_MAX: ${OPS_DB_POOL_MAX:-3}
+      OPS_OPERATOR_PASSWORD: ${OPS_OPERATOR_PASSWORD:?set OPS_OPERATOR_PASSWORD}
+      OPS_TRUST_PROXY_AUTH: "false"
+      ST2_API_URL: ${ST2_API_URL:-}
+      ST2_API_KEY: ${ST2_API_KEY:-}
+      PROMETHEUS_URL: http://prometheus:9090
+      PROMETHEUS_EXPECTED_JOBS: ${PROMETHEUS_EXPECTED_JOBS:-prometheus,ops,alertmanager}
+      HAPROXY_STATS_URL: ${HAPROXY_STATS_URL:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get({host:'127.0.0.1',port:8080,path:'/health/live'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+      start_period: 20s
+
+  # ---- StackStorm (sole automation controller). One actionrunner; coordination via Redis (docs/07). ----
+  mongo:
+    <<: *restart
+    image: mongo:${MONGO_TAG:-7.0.45}
+    mem_limit: 320m
+    command: ["--wiredTigerCacheSizeGB", "0.25", "--auth"]
+    networks: [internal]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?set MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD}
+    volumes: [mongo_data:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 30s
+
+  rabbitmq:
+    <<: *restart
+    image: rabbitmq:${RABBITMQ_TAG:-4.3.7}
+    mem_limit: 256m  # 192m was unhealthy in the FIX-1 smoke
+    networks: [internal]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  redis:
+    <<: *restart
+    image: redis:${REDIS_TAG:-7.4.11-alpine}
+    mem_limit: 64m
+    # Coordination locks only; no persistence needed. Internal network, no host port.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "48mb", "--maxmemory-policy", "noeviction"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  st2api:
+    <<: *st2-common
+    image: stackstorm/st2api:${ST2_TAG:-3.9.0}
+    mem_limit: 192m
+    volumes:
+      - ./stackstorm/st2.docker.conf:/etc/st2/st2.docker.conf:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/st2.user.conf:/etc/st2/st2.user.conf:ro
+      - ../../../automation/stackstorm/packs/cdr:/opt/stackstorm/packs/cdr:ro
+      - st2_virtualenvs:/opt/stackstorm/virtualenvs
+    healthcheck:
+      test: ["CMD", "/opt/stackstorm/st2/bin/python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9101), 3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  st2auth:
+    <<: *st2-common
+    image: stackstorm/st2auth:${ST2_TAG:-3.9.0}
+    # The P3.1 st2 ceilings (64-128m) were SIGKILLed (137) at startup in the local smoke (emulated amd64) and
+    # services idled at 90-98% of them; these are raised ceilings, to be re-measured on the VM in T18.
+    mem_limit: 192m
+    volumes:
+      - ./stackstorm/st2.docker.conf:/etc/st2/st2.docker.conf:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/st2.user.conf:/etc/st2/st2.user.conf:ro
+      # st2admin credentials (htpasswd, bcrypt). Replace the default; never commit.
+      - ${MGMT_SECRETS_DIR:-./secrets}/st2-htpasswd:/etc/st2/htpasswd:ro
+    healthcheck:
+      test: ["CMD", "/opt/stackstorm/st2/bin/python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9100), 3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  st2stream:
+    <<: *st2-common
+    image: stackstorm/st2stream:${ST2_TAG:-3.9.0}
+    mem_limit: 160m
+    healthcheck:
+      test: ["CMD", "/opt/stackstorm/st2/bin/python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9102), 3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  st2web:
+    <<: *restart
+    image: stackstorm/st2web:${ST2_TAG:-3.9.0}
+    mem_limit: 64m
+    networks: [internal]
+    environment:
+      ST2WEB_HTTPS: "0"
+      ST2_API_URL: http://st2api:9101
+      ST2_AUTH_URL: http://st2auth:9100
+      ST2_STREAM_URL: http://st2stream:9102
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/80"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      st2api: { condition: service_healthy }
+      st2auth: { condition: service_healthy }
+
+  st2actionrunner:
+    <<: *st2-common
+    # P4/P5 replace this with the drproj-runner image (Terraform, Ansible, pg client). Exactly one replica.
+    image: ${ST2_RUNNER_IMAGE:-stackstorm/st2actionrunner:3.9.0}
+    mem_limit: 512m
+    healthcheck: *st2-proc-health
+    volumes:
+      - ./stackstorm/st2.docker.conf:/etc/st2/st2.docker.conf:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/st2.user.conf:/etc/st2/st2.user.conf:ro
+      - ../../../automation/stackstorm/packs/cdr:/opt/stackstorm/packs/cdr:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/cdr-pack-config.yaml:/opt/stackstorm/configs/cdr.yaml:ro
+      - st2_virtualenvs:/opt/stackstorm/virtualenvs
+      # Simulation adapter state and call log (provider_adapter: simulation only; unused with the real adapter).
+      - cdr_sim:/opt/stackstorm/cdr-sim
+
+  st2scheduler:
+    <<: *st2-common
+    image: stackstorm/st2scheduler:${ST2_TAG:-3.9.0}
+    mem_limit: 160m
+    healthcheck: *st2-proc-health
+
+  st2workflowengine:
+    <<: *st2-common
+    image: stackstorm/st2workflowengine:${ST2_TAG:-3.9.0}
+    mem_limit: 160m
+    healthcheck: *st2-proc-health
+
+  st2notifier:
+    <<: *st2-common
+    image: stackstorm/st2notifier:${ST2_TAG:-3.9.0}
+    mem_limit: 160m
+    healthcheck: *st2-proc-health
+
+  st2garbagecollector:
+    <<: *st2-common
+    image: stackstorm/st2garbagecollector:${ST2_TAG:-3.9.0}
+    mem_limit: 160m
+    healthcheck: *st2-proc-health
+
+  st2rulesengine:
+    <<: *st2-common
+    image: stackstorm/st2rulesengine:${ST2_TAG:-3.9.0}
+    mem_limit: 160m
+    healthcheck: *st2-proc-health
+
+  st2timersengine:
+    <<: *st2-common
+    image: stackstorm/st2timersengine:${ST2_TAG:-3.9.0}
+    mem_limit: 160m
+    healthcheck: *st2-proc-health
+
+  # One-shot: registers packs/rules (the cdr pack and its 6 h keep-alive rule). Run on demand, not at boot:
+  #   docker compose --profile init run --rm st2-register
+  # then build the pack virtualenv once (see automation/stackstorm/packs/cdr/README.md).
+  st2-register:
+    <<: *st2-common
+    profiles: [init]
+    restart: "no"
+    image: stackstorm/st2actionrunner:${ST2_TAG:-3.9.0}
+    mem_limit: 256m
+    entrypoint: ["/usr/bin/st2-register-content"]
+    command: ["--config-file=/etc/st2/st2.conf", "--config-file=/etc/st2/st2.docker.conf", "--config-file=/etc/st2/st2.user.conf", "--register-all"]
+    volumes:
+      - ./stackstorm/st2.docker.conf:/etc/st2/st2.docker.conf:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/st2.user.conf:/etc/st2/st2.user.conf:ro
+      - ../../../automation/stackstorm/packs/cdr:/opt/stackstorm/packs/cdr:ro
+      # --register-all also registers the pack config (validated against config.schema.yaml) into st2.
+      - ${MGMT_SECRETS_DIR:-./secrets}/cdr-pack-config.yaml:/opt/stackstorm/configs/cdr.yaml:ro
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 60s
+
+  # One-shot startup reconcile (docs/07): run once after st2-register and the virtualenv step; the 60 s timer rule
+  # (cdr.reconcile_every_60s) takes over. `--async` returns once the execution is queued; its result is in st2 history.
+  #   docker compose --profile init run --rm st2-startup-reconcile
+  st2-startup-reconcile:
+    <<: *st2-common
+    profiles: [init]
+    restart: "no"
+    image: stackstorm/st2actionrunner:${ST2_TAG:-3.9.0}
+    mem_limit: 128m
+    environment:
+      ST2_API_URL: http://st2api:9101
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ST2_API_KEY=$$(cat /run/secrets/st2_api_key) exec /opt/stackstorm/st2/bin/st2 run cdr.reconcile --async"]
+    volumes:
+      - ${MGMT_SECRETS_DIR:-./secrets}/st2_api_key:/run/secrets/st2_api_key:ro
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 60s
+
+  # ---- Monitoring (internal network only; no published ports) ----
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v${PROMETHEUS_TAG:-3.15.1}
+    mem_limit: 256m
+    networks: [internal]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=3d
+      - --web.listen-address=0.0.0.0:9090
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../../monitoring/rules:/etc/prometheus/rules:ro
+      - ../../../monitoring/targets:/etc/prometheus/targets:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+      start_period: 20s
+
+  alertmanager:
+    <<: *restart
+    image: prom/alertmanager:v${ALERTMANAGER_TAG:-0.34.1}
+    mem_limit: 64m
+    networks: [internal]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # St2-Api-Key for the webhook receiver (file; never inline in config).
+      - ${MGMT_SECRETS_DIR:-./secrets}/st2_api_key:/run/secrets/st2_api_key:ro
+      - alertmanager_data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9093/-/healthy"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+      start_period: 15s
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:${GRAFANA_TAG:-13.2.4}
+    # 192m was OOM-killed at startup in the local smoke (Grafana 13 with provisioning); re-measure in T18.
+    mem_limit: 256m
+    networks: [internal]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_SERVER_ROOT_URL: https://${GRAFANA_HOST:-grafana.cproj.obed.one}/
+    volumes:
+      - ${MGMT_SECRETS_DIR:-./secrets}/grafana_admin_password:/run/secrets/grafana_admin_password:ro
+      - ../../../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../../monitoring/grafana/dashboards:/var/lib/grafana/dashboards/cdr:ro
+      - grafana_data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || curl -fs -o /dev/null http://127.0.0.1:3000/api/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  blackbox:
+    <<: *restart
+    image: prom/blackbox-exporter:v${BLACKBOX_TAG:-0.29.1}
+    mem_limit: 48m
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9115/-/healthy"]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+
+  # Restore validation target (docs/09). Never auto-started and never run beside capacity operations:
+  #   docker compose --profile restore-test up -d restore-test-pg
+  restore-test-pg:
+    profiles: [restore-test]
+    restart: "no"
+    image: postgres:${RESTORE_TEST_PG_TAG:-17.11-alpine}
+    mem_limit: 512m
+    networks: [internal]
+    environment:
+      POSTGRES_PASSWORD: ${RESTORE_TEST_PG_PASSWORD:?set RESTORE_TEST_PG_PASSWORD}
+    volumes: [restore_test_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 4s
+      retries: 6
+
+networks:
+  edge: {}
+  internal: {}
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  mongo_data: {}
+  rabbitmq_data: {}
+  st2_virtualenvs: {}
+  cdr_sim: {}
+  prometheus_data: {}
+  alertmanager_data: {}
+  grafana_data: {}
+  restore_test_data: {}

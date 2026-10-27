@@ -1,0 +1,31 @@
+---
+# "root" on the fixed hosts (group_vars/fixed.yml, approved deviation): user/sudo creation is skipped and only /root/.ssh is managed.
+bootstrap_deploy_user: drproj
+bootstrap_deploy_home: "{{ '/root' if bootstrap_deploy_user == 'root' else '/home/' ~ bootstrap_deploy_user }}"
+bootstrap_ssh_key_path: >-
+  {{ hostvars[inventory_hostname].ansible_ssh_private_key_file
+     | default(inputs.hosts[drproj_role | default('management')].ssh_key_reference) }}
+bootstrap_docker_version: "{{ inputs.versions.docker }}"
+# Debian 12 (bookworm) and Ubuntu both use download.docker.com/linux/<distribution>; the glob matches 5:<v>-1~debian.12~bookworm and the Ubuntu form.
+bootstrap_docker_repo_base: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}"
+bootstrap_docker_pin: "5:{{ bootstrap_docker_version }}-*"
+bootstrap_node_exporter_port: "{{ inputs.ports.node_exporter }}"
+bootstrap_swap_size_mb: 2048
+bootstrap_swappiness: 10
+bootstrap_config_dir: /etc/drproj
+# node_exporter basic-auth password: generated on the host on first run into this 0600 file under the secrets dir; only its bcrypt hash goes
+# into the web config. Never read from the controller, never logged.
+bootstrap_node_exporter_password_file: "{{ bootstrap_config_dir }}/secrets/node-exporter-basic-auth-password"
+# Ansible venv on the management VM (same ansible-core and collection pins as automation/runner/Dockerfile and requirements.yml).
+bootstrap_ansible_venv: /opt/drproj/ansible-venv
+bootstrap_ansible_core_version: "{{ inputs.versions.ansible }}"
+# True only for the first run as the bootstrap user: the sshd hardening step then verifies the deploy user's key first.
+# group_vars/cloud_app.yml sets it false: cloud VMs keep the provider's first-contact login (docs/15, "Cloud VM first contact").
+bootstrap_harden_sshd: true
+# Separate opt-in: after the key login check, write `PasswordAuthentication no`. Off by default; not enabled by the first fixed-host bootstrap.
+bootstrap_disable_password_auth: false
+# False for fixed hosts: the controller reads <key>.pub and installs it for the deploy user. True for cloud VMs (group_vars/cloud_app.yml):
+# Terraform already installed the cloud key, so the deploy user gets the first-contact user's authorized_keys and no .pub is read.
+bootstrap_authorize_from_connecting_user: false
+# yes for the fixed hosts (known_hosts filled at first contact, docs/15); group_vars/cloud_app.yml sets accept-new for cloud VMs.
+bootstrap_host_key_policy: "yes"

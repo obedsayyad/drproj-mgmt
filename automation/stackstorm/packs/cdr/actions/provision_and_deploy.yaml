@@ -1,0 +1,16 @@
+---
+name: provision_and_deploy
+pack: cdr
+description: "Provision a VM into a reserved slot: attempts, one retry on the same provider, alternate provider, exhausted incident."
+runner_type: orquesta
+entry_point: workflows/provision_and_deploy.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  slot_key: {type: string, required: true}
+  slot_generation: {type: integer, required: true}
+  first_attempt: {type: integer, default: 1}
+  attempts_done: {type: object, default: {}}
+  slot_kind: {type: string, default: elastic, enum: [elastic, warm, interim_warm]}

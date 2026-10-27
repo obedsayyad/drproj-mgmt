@@ -1,0 +1,12 @@
+---
+name: release_lease
+pack: cdr
+description: Release the capacity lease held by this operation at this fencing generation. released=false when it no longer holds it.
+runner_type: python-script
+entry_point: release_lease.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  generation: {type: integer, required: true}
+  app_key: {type: string, default: relief}

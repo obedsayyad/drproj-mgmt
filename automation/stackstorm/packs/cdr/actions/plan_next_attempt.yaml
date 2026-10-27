@@ -1,0 +1,13 @@
+---
+name: plan_next_attempt
+pack: cdr
+description: "After a cleaned attempt: retry same provider, alternate provider, or exhausted. Reserves the next slot."
+runner_type: python-script
+entry_point: plan_next_attempt.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  attempts: {type: object, required: true}
+  slot_kind: {type: string, default: elastic, enum: [elastic, warm, interim_warm]}

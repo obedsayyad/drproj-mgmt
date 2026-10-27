@@ -1,0 +1,13 @@
+---
+name: primary_failure
+pack: cdr
+description: "Primary failed: simulated routing (primary maint, warm active) and exactly one elastic VM on the non-warm provider."
+runner_type: orquesta
+entry_point: workflows/primary_failure.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}
+  resume: {type: boolean, default: false}
+  first_attempt: {type: integer, default: 1}
+  attempts_done: {type: object, default: {}}

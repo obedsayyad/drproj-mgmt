@@ -1,0 +1,8 @@
+---
+# First run against the pre-created hosts, as the bootstrap user (gen-inventory.py --bootstrap). NOT run by this project's checks.
+- name: Bootstrap hosts
+  hosts: management:primary:lb:testing
+  become: true
+  roles:
+    - role: bootstrap
+      tags: [bootstrap]

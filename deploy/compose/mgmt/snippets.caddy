@@ -1,0 +1,26 @@
+# Shared site bodies. Mutating methods on the ops host need the shared operator password (docs/08);
+# GETs stay public. The hash comes from the environment and must be the bcrypt of OPS_OPERATOR_PASSWORD.
+(ops_site) {
+	@mutating method POST PATCH PUT DELETE
+	basic_auth @mutating {
+		operator {env.OPS_BASIC_AUTH_HASH}
+	}
+	reverse_proxy ops:8080
+}
+
+(grafana_site) {
+	reverse_proxy grafana:3000
+}
+
+(st2_site) {
+	reverse_proxy st2web:80
+}
+
+# HAProxy admin stats live on the LB VM (P6). Unset upstream resolves to nothing and answers 502.
+(stats_site) {
+	reverse_proxy {$HAPROXY_STATS_UPSTREAM:haproxy-stats.invalid:8404} {
+		transport http {
+			tls
+		}
+	}
+}

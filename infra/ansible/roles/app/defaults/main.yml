@@ -1,0 +1,17 @@
+---
+app_dir: /etc/drproj/app
+app_registry_host: "{{ inputs.registry.host }}"
+app_digest: "{{ inputs.registry.application_image_digest | default('', true) }}"
+app_allow_local_tag: "{{ inputs.allow_local_tag | default(false) | bool }}"
+app_image: >-
+  {{ (app_registry_host ~ '/' ~ inputs.registry.namespace ~ '/' ~ inputs.registry.images.relief ~ '@' ~ app_digest)
+     if app_digest | length > 0 else (inputs.registry.images.relief ~ ':local') }}
+app_instance_id: "{{ instance_id | default(inventory_hostname) }}"
+app_version: "{{ app_digest[7:19] if app_digest | length > 0 else 'local' }}"
+app_supabase_env: "{{ inputs.supabase.app_connection_reference | regex_replace('^env://', '') }}"
+app_ghcr_env: "{{ inputs.registry.pull_credential_reference | default('') | regex_replace('^env://', '') }}"
+app_ca_bundle_env: BACKEND_CA_BUNDLE
+app_db_pool_max: 2
+app_ready_retries: 30
+app_ready_delay: 5
+app_container: drproj-app-relief-1

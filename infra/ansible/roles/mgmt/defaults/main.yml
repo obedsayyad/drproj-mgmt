@@ -1,0 +1,3 @@
+---
+# Placeholder so defaults/ exists; the mgmt role is a scaffold until P6/P7.
+mgmt_phase: "P6/P7"

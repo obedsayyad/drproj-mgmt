@@ -1,0 +1,9 @@
+---
+name: reconcile
+pack: cdr
+description: "Reconcile every 60 s and at startup (adopt, resume, tag scan, orphan incidents; read-only while another operation holds a live lease)."
+runner_type: orquesta
+entry_point: workflows/reconcile.yaml
+enabled: true
+parameters:
+  app_key: {type: string, default: relief}

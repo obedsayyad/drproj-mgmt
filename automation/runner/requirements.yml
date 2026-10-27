@@ -1,0 +1,6 @@
+# Ansible collections baked into the runner image (versions.ansible_collections in deployment inputs).
+collections:
+  - name: community.docker
+    version: 5.4.0
+  - name: ansible.posix
+    version: 2.2.2

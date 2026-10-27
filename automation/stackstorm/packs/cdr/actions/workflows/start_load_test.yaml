@@ -1,0 +1,73 @@
+version: 1.0
+description: >
+  SKELETON (P6). Start a bounded k6 load test: not implemented until P6/P8. Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
+  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
+  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+input:
+  - operation_id
+vars:
+  - error: {}
+  - failed_step: ''
+tasks:
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+    next:
+      - when: <% succeeded() %>
+        do: validate_bounds
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  validate_bounds:
+    action: cdr.not_implemented
+    input:
+      step: validate_bounds
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: start_k6
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: validate_bounds
+        do: fail_handler
+  start_k6:
+    action: cdr.not_implemented
+    input:
+      step: start_k6
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: observe
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: start_k6
+        do: fail_handler
+  observe:
+    action: cdr.not_implemented
+    input:
+      step: observe
+      phase: P6
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: observe
+        do: fail_handler
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      error: <% ctx().error %>
+      step: <% ctx().failed_step or 'start' %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

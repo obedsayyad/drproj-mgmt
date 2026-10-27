@@ -1,0 +1,10 @@
+---
+name: policy_verify
+pack: cdr
+description: "Apply_policy step 4: confirm the running Prometheus carries the pending policy_version label."
+runner_type: python-script
+entry_point: policy_verify.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}

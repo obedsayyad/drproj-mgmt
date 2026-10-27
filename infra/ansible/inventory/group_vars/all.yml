@@ -1,0 +1,5 @@
+---
+# The deployment inputs are the single source of versions, ports and registry values (docs/12). Pass inputs_file with -e; the default is the
+# gitignored runtime copy. env://NAME secrets are read from the controller environment at task time, never stored in the inputs.
+inputs_file: "{{ playbook_dir }}/../../../deploy/inputs/deployment-inputs.local.json"
+inputs: "{{ lookup('ansible.builtin.file', inputs_file) | from_json }}"

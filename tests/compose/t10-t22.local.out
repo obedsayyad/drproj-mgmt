@@ -1,0 +1,139 @@
+T10/T22 LOCAL SIMULATION RUN - Docker Desktop on a developer Mac (arm64), NOT the management VM, no cloud resources
+provider adapter: simulation (flock'd JSON on the st2 volume); every instance row must carry simulated=true
+StackStorm images run as linux/amd64 (emulated on arm64); timings are NOT representative of the 2 vCPU / 4 GB VM
+date: 2026-10-26T19:45:29Z
+--- 1. Postgres, migrations through ops/0013, test policy
+PASS localpg healthy
+      app/0001_app_schema.sql
+      app/0002_runtime_readiness_grant.sql
+PASS ops/0012 and ops/0013 applied (7)
+PASS st2 login role is a member of dr_ops and dr_automation
+    {"msg":"policy version 1 seeded"}
+    active policy: 1|[30, 45, 60]|60|10  (version, checkpoints, deadline, renewal)
+--- 2. StackStorm (emulated amd64: slow)
+PASS mongo, rabbitmq, redis healthy
+PASS st2api healthy
+PASS st2 services healthy
+PASS st2-register --register-all (actions, workflows, policies, pack config)
+PASS st2 token obtained (not printed)
+PASS reconcile timer rule disabled for deterministic assertions
+    observed: packs.setup_virtualenv did not complete (see t16-t30.local.out); finishing the venv from requirements.txt
+PASS st2actionrunner healthy
+PASS pack virtualenv has psycopg
+PASS simulation state dir on the st2 volume
+--- 3. registration: workflows, policies, actions/lib import on the live st2
+PASS action cdr.scale_out registered
+PASS action cdr.provision_and_deploy registered
+PASS action cdr.provision_attempt registered
+PASS action cdr.run_heavy registered
+PASS action cdr.reconcile registered
+PASS action cdr.reconcile_pass registered
+PASS action cdr.primary_failure registered
+PASS action cdr.scale_in registered
+PASS action cdr.activate_standby registered
+PASS action cdr.alert_intent registered
+PASS action cdr.open_operation registered
+PASS action cdr.provider_create registered
+PASS policies registered (cdr.capacity_guard.activate_standby,cdr.capacity_guard.apply_policy,cdr.capacity_guard.primary_failure,cdr.capacity_guard.scale_in,cdr.capacity_guard.scale_out,cdr.capacity_guard.standby_repair,cdr.heavy,cdr.reconcile_single)
+PASS actions/lib imports on live st2 (cdr.adapter_info -> status adapter simulated) (succeeded simulation True)
+--- 4. the 60 s reconcile timer rule fires (IntervalTimer) and a startup-style manual run works
+PASS no live lease and no non-terminal operation before timer (0 0)
+PASS timer rule enabled
+PASS timer-driven executions exist (rule trigger on the execution, no manual run) (2)
+PASS reconcile with nothing to do is a succeeded operation, no side effect (2)
+PASS no slot reserved, no incident (0 0)
+PASS the seeded warm standby is explained (no orphan) (0)
+--- 5. T10: primary_failure + scale_out + reconcile fired together (one capacity lease, fencing, one slot per operation)
+PASS no live lease and no non-terminal operation before T10 (0 0)
+PASS operations opened (204aa1c2-f56e-44e3-9748-40cba646869f, b5ec61ea-5b2f-4fc3-a86a-48d117392fa2)
+PASS primary_failure execution finished (succeeded)
+PASS scale_out execution finished (succeeded)
+PASS reconcile execution finished (succeeded)
+    primary_failure: succeeded -   scale_out: succeeded -   reconcile: succeeded lease_held
+PASS primary_failure ended succeeded (succeeded)
+PASS scale_out ended succeeded or a recorded no-op (succeeded)
+PASS no operation failed (0)
+PASS each lease generation had exactly one holder (distinct generation per lease_acquired event) (0)
+PASS lease holders never overlapped in time (acquire .. finish intervals are disjoint) (0)
+PASS each operation reserved at most one slot (1)
+    elastic slots bound: 1
+PASS elastic VMs: one if scale_out ran first (reused), two if after; never more (t)
+PASS adapter create count equals the intended VMs (one per bound elastic slot) (1)
+PASS no (slot, op, attempt) was created twice (0)
+PASS warm standby is now active and the primary is in simulated maintenance (active maint)
+PASS no capacity-lease left behind (free)
+PASS primary.unhealthy incident open (the outage record) (1)
+PASS T10 primary_failure events validate against events.schema.json (ok)
+PASS T10 scale_out events validate against events.schema.json (ok)
+--- 6. T10b: an expired lease is taken over only by reconcile; the fenced worker gets CDR01 and creates nothing more
+PASS no live lease and no non-terminal operation before T10b (0 0)
+PASS while expired and unreleased the lease is not taken by a non-reconcile operation (46b80525-9a75-462a-bcd3-c99798b47292)
+PASS reconcile took the lease over (new fencing generation) and re-dispatched the interrupted operation under the same operation_id (true 1)
+PASS the interrupted operation was left reconciling (by the fenced worker or the takeover), never silently running (1)
+PASS the fenced worker's action ended lease_lost (CDR01), not as a success (yes)
+PASS nothing was created after the lease was fenced (create count unchanged; the resume adopts the attempt by tags) (1 1)
+PASS no operation left non-terminal and no lease stranded (0 free)
+--- 7. T22: scale-in (normal), then primary down + cpu.low -> refused (primary_outage); a queued scale-in is superseded
+PASS no live lease and no non-terminal operation before T22 (0 0)
+    7a. normal scale-in through the cpu.low alert webhook (rule cdr_alert -> cdr.alert_intent -> cdr.scale_in)
+PASS webhook accepted (202)
+    scale_in: succeeded -
+PASS scale_in succeeded with no noop_reason (a real removal) (succeeded -)
+PASS newest elastic slot released after confirmed deletion (free)
+PASS adapter deleted exactly that resource and it is absent (1 0)
+PASS the warm standby was not touched (bound 1)
+PASS drain was simulated before the delete, routing removed first (set_routing:draining drain set_routing:none delete)
+PASS slot.releasing then slot.released audited once (1 1)
+PASS scale_in events validate against events.schema.json (ok)
+    7b. primary marked down (cpu.low during the outage is refused)
+PASS primary_unhealthy webhook accepted (202)
+PASS primary_failure succeeded, reusing the existing elastic VM (exactly one elastic) (succeeded 1)
+PASS open primary.unhealthy incident exists (1)
+PASS cpu.low webhook accepted during the outage (202)
+PASS scale_in succeeded as a no-op with noop_reason primary_outage (succeeded primary_outage)
+PASS zero begin_slot_release (no slot.releasing audit) (0)
+PASS no provider delete and the elastic VM still exists, still bound (0 1 bound)
+PASS the refusal was recorded with the step noop (1)
+    7c. a scale-in queued before the failure is superseded by primary_failure
+PASS scale_in is queued (queued)
+PASS second primary_unhealthy webhook accepted (202)
+PASS queued scale_in became a succeeded no-op superseded (succeeded superseded)
+PASS it never ran: no events but the supersede (0)
+--- 8. restart gate: the actionrunner is killed mid-create; reconcile adopts by operation_id (start_attempt created=false), no duplicate create
+PASS no live lease and no non-terminal operation before restart (0 0)
+PASS the create call persisted one resource and is still in flight (1)
+PASS slot reserved but not bound at the kill (reserved)
+    st2actionrunner killed (SIGKILL) mid-create
+PASS st2actionrunner restarted and healthy
+PASS the killed worker's operation is not terminal and still holds a (soon expired) lease (running)
+    waiting for the lease to expire (<= 120 s) while calling reconcile every 20 s
+    operation: succeeded -
+PASS the interrupted operation was resumed under the SAME operation_id and succeeded (succeeded)
+PASS reconcile recorded the takeover and the resume (1 t)
+PASS start_attempt answered created=false on the restart (yes)
+PASS NO duplicate create: the adapter created exactly one resource for the operation (1)
+PASS one attempt, ready, on one slot (1 ready 1)
+PASS slot bound to the one resource and the instance ready (bound ready)
+PASS nothing was deleted (0)
+PASS lease released, nothing non-terminal (free 0)
+PASS events validate against events.schema.json (ok)
+--- 9. orphan gate: a project-tagged resource nothing explains is held and reported, never deleted
+PASS no live lease and no non-terminal operation before orphan (0 0)
+PASS both resources exist before reconcile (11)
+PASS reconcile execution succeeded (succeeded)
+PASS the slot named by the tags is held_uncertain (counted) (held_uncertain)
+PASS instance row for the held slot is simulated and records the resource id (t)
+PASS one open critical incident per orphan (orphan:<provider>:<id>) (2)
+PASS the untagged-slot orphan did not invent a slot (1)
+PASS both resources STILL EXIST (never deleted by tag alone) (11)
+PASS no delete call at all (0)
+PASS the held slot still counts against the provider cap (2)
+PASS the next tick keeps it without incident spam: still 2 incidents, 1 event each (2 2)
+PASS still nothing deleted after the second tick (0 11)
+PASS reconcile operations succeeded and released the lease (0 free)
+PASS reconcile events validate against events.schema.json (ok)
+--- 10. runner stayed up (except the deliberate kill)
+    st2actionrunner restart count: 0 (informational; the restart gate kills the runner once, deliberately)
+--- summary
+passed=107 failed=0
+--- cleanup

@@ -1,0 +1,346 @@
+version: 1.0
+description: One provisioning attempt on one reserved slot (inner workflow of cdr.provision_and_deploy).
+input:
+  - operation_id
+  - lease_generation
+  - provider
+  - slot_key
+  - slot_generation
+  - attempt
+vars:
+  - resource_id: ''
+  - ip: ''
+  - deadline_at: ''
+  - checkpoints_at: []
+  - image_digest: ''
+  - error_code: ''
+  - evidence: {}
+  - attempt_result: ''
+output:
+  - result: <% ctx().attempt_result %>
+  - resource_id: <% ctx().resource_id %>
+  - ip: <% ctx().ip %>
+tasks:
+  start_attempt:
+    action: cdr.start_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      attempt: <% ctx().attempt %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() and result().result.created %>
+        publish:
+          - deadline_at: <% result().result.deadline_at %>
+          - checkpoints_at: <% result().result.checkpoints_at %>
+        do: create
+      # The attempt row already exists: a restart. Never create again; the provider tags decide (adopt_attempt).
+      - when: <% succeeded() and not result().result.created %>
+        publish:
+          - deadline_at: <% result().result.deadline_at %>
+          - checkpoints_at: <% result().result.checkpoints_at %>
+        do: adopt
+
+  adopt:
+    action: cdr.adopt_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      attempt: <% ctx().attempt %>
+    next:
+      # One resource carries this attempt's tags: take it over; bind it first when the slot is still only reserved.
+      - when: <% succeeded() and result().result.result = 'present' and result().result.slot_state = 'reserved' %>
+        publish:
+          - resource_id: <% result().result.resource_id %>
+          - ip: <% result().result.ip %>
+          - vcpu: 1
+          - memory_mb: 1024
+        do: step_created
+      - when: <% succeeded() and result().result.result = 'present' and result().result.slot_state != 'reserved' %>
+        publish:
+          - resource_id: <% result().result.resource_id %>
+          - ip: <% result().result.ip %>
+        do: set_deploying
+      - when: <% succeeded() and result().result.result = 'ready' %>
+        publish:
+          - attempt_result: ready
+      # Cleanup was in progress when the worker died.
+      - when: <% succeeded() and result().result.result = 'failed' %>
+        publish:
+          - error_code: attempt_interrupted
+        do: tf_delete
+      # The provider lists nothing for this attempt: it never happened; fail it, prove absence, retry through plan.
+      - when: <% succeeded() and result().result.result = 'absent' %>
+        publish:
+          - error_code: attempt_interrupted
+        do: mark_failed
+      - when: <% succeeded() and result().result.result = 'unknown' %>
+        publish:
+          - error_code: attempt_already_started
+        do: hold_uncertain
+
+  create:
+    action: cdr.run_heavy
+    input:
+      task: terraform_apply
+      resource_class: heavy
+      exists: true
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      attempt: <% ctx().attempt %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ok' %>
+        publish:
+          - resource_id: <% result().result.resource_id %>
+          - ip: <% result().result.ip %>
+          - vcpu: <% result().result.vcpu %>
+          - memory_mb: <% result().result.memory_mb %>
+        do: step_created
+      # Provider refused: nothing was created as far as it says, but absence still has to be proven by tag scan.
+      - when: <% succeeded() and result().result.result = 'unavailable' %>
+        publish:
+          - error_code: provider_unavailable
+        do: mark_failed
+      # A timeout does not prove the VM does not exist: hold the slot, no retry, no fallback.
+      - when: <% succeeded() and result().result.result != 'ok' and result().result.result != 'unavailable' %>
+        publish:
+          - error_code: create_<% result().result.result %>
+        do: hold_uncertain
+
+  step_created:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: create
+      message: <% 'attempt ' + str(ctx().attempt) + ' - ' + ctx().provider + ' resource created' %>
+    next:
+      - when: <% succeeded() %>
+        do: bind
+
+  bind:
+    action: cdr.bind_slot
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      resource_id: <% ctx().resource_id %>
+      public_ip: <% ctx().ip %>
+      vcpu: <% ctx().vcpu %>
+      memory_mb: <% ctx().memory_mb %>
+    next:
+      - when: <% succeeded() %>
+        do: set_deploying
+
+  set_deploying:
+    action: cdr.set_instance_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      lifecycle: deploying
+      power_state: 'on'
+    next:
+      - when: <% succeeded() %>
+        do: deploy
+
+  deploy:
+    action: cdr.run_heavy
+    input:
+      task: deploy
+      resource_class: heavy
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      provider: <% ctx().provider %>
+      resource_id: <% ctx().resource_id %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ok' %>
+        do: wait_ready
+      - when: <% succeeded() and result().result.result != 'ok' %>
+        publish:
+          - error_code: deploy_failed
+        do: mark_failed
+
+  wait_ready:
+    action: cdr.wait_ready
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      provider: <% ctx().provider %>
+      resource_id: <% ctx().resource_id %>
+      deadline_at: <% ctx().deadline_at %>
+      checkpoints_at: <% ctx().checkpoints_at %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ready' %>
+        publish:
+          - image_digest: <% result().result.image_digest %>
+        do: set_ready
+      - when: <% succeeded() and result().result.result = 'deadline' %>
+        publish:
+          - error_code: readiness_deadline
+        do: mark_failed
+      - when: <% succeeded() and result().result.result = 'unknown' %>
+        publish:
+          - error_code: readiness_unknown
+        do: hold_uncertain
+
+  set_ready:
+    action: cdr.set_instance_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      lifecycle: ready
+      power_state: 'on'
+      image_digest: <% ctx().image_digest %>
+    next:
+      - when: <% succeeded() %>
+        do: finish_ready
+
+  finish_ready:
+    action: cdr.finish_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      attempt: <% ctx().attempt %>
+      status: ready
+      result_refs: {resource_id: <% ctx().resource_id %>, image_digest: <% ctx().image_digest %>}
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - attempt_result: ready
+
+  # ---- failed attempt: record, announce, delete, prove absence, free the slot
+  mark_failed:
+    action: cdr.finish_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      attempt: <% ctx().attempt %>
+      status: failed
+      error_code: <% ctx().error_code %>
+    next:
+      - when: <% succeeded() %>
+        do: emit_failed
+
+  emit_failed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: infrastructure.provision.failed
+      step: <% 'attempt_' + str(ctx().attempt) + '_failed' %>
+      status: running
+      message: <% 'attempt ' + str(ctx().attempt) + ' on ' + ctx().provider + ' failed - ' + ctx().error_code %>
+    next:
+      - when: <% succeeded() %>
+        do: tf_delete
+
+  # Terraform deletes (apply exists=false) through run_heavy; cleanup below then proves absence through the provider API.
+  tf_delete:
+    action: cdr.run_heavy
+    input:
+      task: terraform_apply
+      resource_class: heavy
+      exists: false
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      attempt: <% ctx().attempt %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ok' %>
+        do: cleanup
+      - when: <% succeeded() and result().result.result != 'ok' %>
+        publish:
+          - error_code: terraform_delete_<% result().result.result %>
+        do: hold_uncertain
+
+  cleanup:
+    action: cdr.provider_cleanup
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      attempt: <% ctx().attempt %>
+      resource_id: <% ctx().resource_id %>
+    next:
+      - when: <% succeeded() and result().result.result = 'cleaned' %>
+        publish:
+          - evidence: <% result().result.evidence %>
+        do: finish_cleaned
+      # Absence not proven (unknown, still present): the slot stays counted.
+      - when: <% succeeded() and result().result.result != 'cleaned' %>
+        publish:
+          - error_code: cleanup_<% result().result.result %>
+        do: hold_uncertain
+
+  finish_cleaned:
+    action: cdr.finish_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      attempt: <% ctx().attempt %>
+      status: cleaned
+      error_code: <% ctx().error_code %>
+    next:
+      - when: <% succeeded() %>
+        do: begin_release
+
+  begin_release:
+    action: cdr.begin_slot_release
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: release
+
+  release:
+    action: cdr.release_slot
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      evidence: <% ctx().evidence %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - attempt_result: cleaned
+
+  # ---- existence unknown: counted slot, no further provider call
+  hold_uncertain:
+    action: cdr.mark_slot_uncertain
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      reason: <% ctx().error_code %>
+    next:
+      - when: <% succeeded() %>
+        do: finish_uncertain
+
+  finish_uncertain:
+    action: cdr.finish_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      attempt: <% ctx().attempt %>
+      status: uncertain
+      error_code: <% ctx().error_code %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - attempt_result: uncertain

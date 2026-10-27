@@ -1,0 +1,13 @@
+---
+name: begin_slot_release
+pack: cdr
+description: Mark a slot releasing (deletion started). Warm slots are protected in SQL; the slot stays counted.
+runner_type: python-script
+entry_point: begin_slot_release.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  slot_key: {type: string, required: true}
+  slot_generation: {type: integer, required: true}

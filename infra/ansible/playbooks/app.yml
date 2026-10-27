@@ -1,0 +1,29 @@
+---
+# Deploy the relief app to one or more application hosts (limit with --limit <instance_id>). Used by cdr.run_heavy task ansible_deploy.
+# Prerequisite: the CA exists on the management VM (ca-init.yml). Emits per-host stats {ready, instance_id, digest}.
+#
+# Cloud VMs switch SSH user mid-run: play 1 connects as the Terraform-provisioned first-contact user (cloud_first_contact_user, from
+# inventory/cloud_app.py) with the cloud key, creates `drproj` and copies that key's authorized_keys to it; sshd is not hardened and no
+# .pub is read (group_vars/cloud_app.yml). Play 2 then connects as `drproj`. Fixed hosts are already bootstrapped and keep full hardening.
+- name: Bootstrap cloud VMs (first contact as the provisioned user)
+  hosts: cloud_app
+  become: true
+  vars:
+    ansible_user: "{{ cloud_first_contact_user }}"
+  roles:
+    - role: bootstrap
+      tags: [bootstrap]
+
+- name: Deploy the relief app
+  hosts: primary:cloud_app
+  become: true
+  roles:
+    - role: bootstrap
+      tags: [bootstrap]
+      when: "'primary' in group_names"
+    - role: ca
+      vars:
+        ca_action: issue
+      tags: [ca]
+    - role: app
+      tags: [app]

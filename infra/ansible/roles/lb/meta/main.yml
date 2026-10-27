@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  author: drproj
+  description: HAProxy load balancer host (scaffold until P6)
+  license: MIT
+  min_ansible_version: "2.17"
+  role_name: lb
+  namespace: drproj
+  platforms:
+    - name: Debian
+      versions: [all]
+    - name: Ubuntu
+      versions: [all]
+  galaxy_tags: [haproxy, scaffold]
+dependencies: []

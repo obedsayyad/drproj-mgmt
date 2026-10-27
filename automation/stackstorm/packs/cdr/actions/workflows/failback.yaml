@@ -1,0 +1,138 @@
+version: 1.0
+description: >
+  SKELETON (P6). Automatic failback to the primary (docs/04): not implemented until P6 (HAProxy routing). Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
+  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
+  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+input:
+  - operation_id
+vars:
+  - error: {}
+  - failed_step: ''
+tasks:
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+    next:
+      - when: <% succeeded() %>
+        do: direct_probes
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  direct_probes:
+    action: cdr.not_implemented
+    input:
+      step: direct_probes
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: weight_zero
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: direct_probes
+        do: fail_handler
+  weight_zero:
+    action: cdr.not_implemented
+    input:
+      step: weight_zero
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: ready_gate
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: weight_zero
+        do: fail_handler
+  ready_gate:
+    action: cdr.not_implemented
+    input:
+      step: ready_gate
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: rise_counts
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: ready_gate
+        do: fail_handler
+  rise_counts:
+    action: cdr.not_implemented
+    input:
+      step: rise_counts
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: ramp_10
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: rise_counts
+        do: fail_handler
+  ramp_10:
+    action: cdr.not_implemented
+    input:
+      step: ramp_10
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: ramp_50
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: ramp_10
+        do: fail_handler
+  ramp_50:
+    action: cdr.not_implemented
+    input:
+      step: ramp_50
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: ramp_100
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: ramp_50
+        do: fail_handler
+  ramp_100:
+    action: cdr.not_implemented
+    input:
+      step: ramp_100
+      phase: P6
+    next:
+      - when: <% succeeded() %>
+        do: reverse_on_regression
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: ramp_100
+        do: fail_handler
+  reverse_on_regression:
+    action: cdr.not_implemented
+    input:
+      step: reverse_on_regression
+      phase: P6
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: reverse_on_regression
+        do: fail_handler
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      error: <% ctx().error %>
+      step: <% ctx().failed_step or 'start' %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

@@ -1,0 +1,400 @@
+version: 1.0
+description: >
+  Scale-in: take the lease, refuse during a primary outage or on stale metrics, pick the newest elastic slot, drain (SIMULATED, policy drain timeout; a timeout pauses the operation and raises an incident without deleting), persist routing removal, release the slot only after the provider API confirms the VM is gone.
+input:
+  - operation_id
+  - app_key: relief
+vars:
+  - generation: 0
+  - simulated: true
+  - adapter_mode: ''
+  - noop_reason: ''
+  - error: {}
+  - provider: ''
+  - slot_key: ''
+  - slot_generation: 0
+  - resource_id: ''
+  - evidence: {}
+tasks:
+  adapter:
+    action: cdr.adapter_info
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - simulated: <% result().result.simulated %>
+          - adapter_mode: <% result().result.adapter_mode %>
+        do: start
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+      adapter_mode: <% ctx().adapter_mode %>
+    next:
+      - when: <% succeeded() %>
+        do: acquire
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  acquire:
+    action: cdr.wait_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+        do: step_lease
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - noop_reason: <% 'lease_' + result().result.reason %>
+        do: noop_no_lease
+      - when: <% failed() %>
+        publish:
+          - noop_reason: lease_unavailable
+        do: noop_no_lease
+  step_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: lease_acquired
+      status: running
+      message: <% 'capacity lease held at generation ' + str(ctx().generation) %>
+    next:
+      - when: <% succeeded() %>
+        do: gate
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  gate:
+    action: cdr.scale_in_gate
+    input:
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() and result().result.proceed %>
+        publish:
+          - provider: <% result().result.provider %>
+          - slot_key: <% result().result.slot_key %>
+          - slot_generation: <% result().result.slot_generation %>
+          - resource_id: <% result().result.resource_id %>
+        do: mark_draining
+      - when: <% succeeded() and not result().result.proceed %>
+        publish:
+          - noop_reason: <% result().result.noop_reason %>
+        do: noop_release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  mark_draining:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: <% ctx().slot_key %>
+      mode: draining
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: drain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  drain:
+    action: cdr.drain_instance
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      resource_id: <% ctx().resource_id %>
+    next:
+      - when: <% succeeded() and result().result.result = 'drained' %>
+        do: route_off
+      - when: <% succeeded() and result().result.result = 'timeout' %>
+        do: drain_incident
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  route_off:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: <% ctx().slot_key %>
+      mode: none
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: begin_release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  begin_release:
+    action: cdr.begin_slot_release
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: tf_delete
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  tf_delete:
+    action: cdr.run_heavy
+    input:
+      task: terraform_apply
+      resource_class: heavy
+      exists: false
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ok' %>
+        do: delete
+      - when: <% succeeded() and result().result.result != 'ok' %>
+        do: hold_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  delete:
+    action: cdr.delete_slot_resource
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      resource_id: <% ctx().resource_id %>
+    next:
+      - when: <% succeeded() and result().result.result = 'cleaned' %>
+        publish:
+          - evidence: <% result().result.evidence %>
+        do: release_slot
+      - when: <% succeeded() and result().result.result != 'cleaned' %>
+        do: hold_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release_slot:
+    action: cdr.release_slot
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      evidence: <% ctx().evidence %>
+    next:
+      - when: <% succeeded() %>
+        do: verifying
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: VM deleted and absence confirmed through the provider API; slot released
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: {slot_key: <% ctx().slot_key %>, provider: <% ctx().provider %>, adapter: <% ctx().adapter_mode %>, simulated: <% ctx().simulated %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  drain_incident:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'infrastructure.drain.timeout:' + ctx().slot_key %>
+      severity: warning
+      source: automation
+      description: <% 'drain of ' + ctx().slot_key + ' did not finish within the drain timeout; deletion paused' %>
+      resources: <% [ctx().slot_key] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: drain_event
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  drain_event:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: infrastructure.drain.timeout
+      step: drain_timeout
+      message: drain timeout; nothing deleted
+    next:
+      - when: <% succeeded() %>
+        do: undrain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  undrain:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: <% ctx().slot_key %>
+      mode: active
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: pause
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  pause:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.paused
+      step: drain_timeout
+      status: paused
+      message: "paused: drain timed out; an operator decides"
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  hold_uncertain:
+    action: cdr.mark_slot_uncertain
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      reason: delete_not_confirmed
+    next:
+      - when: <% succeeded() %>
+        do: raise_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  raise_uncertain:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'scale_in.delete_unconfirmed:' + ctx().slot_key %>
+      severity: critical
+      source: automation
+      description: <% 'deletion of the VM in ' + ctx().slot_key + ' could not be confirmed; the slot stays held and counted until reconcile resolves it' %>
+      resources: <% [ctx().slot_key] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: fail_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  fail_uncertain:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.failed
+      step: held_uncertain
+      status: failed
+      message: deletion not confirmed; slot held
+      outcome: {error: held_uncertain, slot_key: <% ctx().slot_key %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_release:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_no_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: <% ctx().error %>
+      step: workflow_error
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

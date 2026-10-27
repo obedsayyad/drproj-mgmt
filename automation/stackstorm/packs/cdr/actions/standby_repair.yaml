@@ -1,0 +1,10 @@
+---
+name: standby_repair
+pack: cdr
+description: "Repair the warm standby (simulated routing): classify, redeploy / power on / re-provision, or hold and use an interim warm standby on the other provider."
+runner_type: orquesta
+entry_point: workflows/standby_repair.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}

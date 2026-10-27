@@ -1,0 +1,84 @@
+---
+supabase_ops_url:
+  description: Session-pooler connection string of a login role that is a member of dr_ops and dr_automation (dr_automation is required by the capacity actions).
+  type: string
+  secret: true
+  required: true
+provider_adapter:
+  description: "Which provider adapter the capacity workflows use. Required, no default: simulation is the local adapter (never real infrastructure), real creates through Terraform (tf-slot.sh, only inside cdr.run_heavy) and reads through the DigitalOcean and Linode APIs; it needs the real_adapter object."
+  type: string
+  enum: [simulation, real]
+  required: true
+simulation_faults:
+  description: Optional path of the simulation fault file (JSON). Absent or unset means no faults.
+  type: string
+  required: false
+simulation_state_dir:
+  description: Directory for the simulation state and call log (a volume shared with the st2 actionrunner).
+  type: string
+  default: /opt/stackstorm/cdr-sim
+prometheus_url:
+  description: Prometheus base URL used to judge metrics freshness before scaling. Unset means only the simulation adapter may answer.
+  type: string
+  required: false
+prometheus_expected_jobs:
+  description: Comma-separated job names that must be up and freshly scraped.
+  type: string
+  default: relief
+policy_compile:
+  description: "How cdr.apply_policy re-renders the Prometheus policy_version label and reloads. Required, no default: simulation writes a file under simulation_state_dir (nothing real is touched), real writes prometheus_config_path and reloads prometheus_url."
+  type: string
+  enum: [simulation, real]
+  required: true
+prometheus_config_path:
+  description: Live prometheus.yml (read-write) for policy_compile real. Needs prometheus_url too.
+  type: string
+  required: false
+real_adapter:
+  description: "Settings of the real provider adapter. The schema cannot make this object conditional on provider_adapter: real, so providers.load rejects provider_adapter real without it (real_adapter_config_missing); when present, every key below is required. Values ending in _env name an environment variable (env://NAME or NAME) read at call time; no secret is stored here."
+  type: object
+  required: false
+  additionalProperties: false
+  properties:
+    tf_slot_script:
+      description: Absolute path of scripts/tf-slot.sh on the runner.
+      type: string
+      required: true
+    tf_state_dir:
+      description: Terraform state root (cloud_application.terraform.tf_state_dir), absolute, mode 0700.
+      type: string
+      required: true
+    terraform_bin:
+      description: Optional terraform binary override (tests use a fake; the runner image uses PATH).
+      type: string
+      required: false
+    ansible:
+      description: "Settings of ansible_deploy (P5.3). Optional here; without it a real deploy is a configuration error."
+      type: object
+      required: false
+      additionalProperties: false
+      properties:
+        playbook_dir: {type: string, required: true, description: "Absolute path of infra/ansible on the runner (the runner image copies it to /opt/drproj/ansible)."}
+        inputs_path: {type: string, required: true, description: "Absolute path of deployment-inputs.local.json on the runner (read-only mount)."}
+        ssh_key_path: {type: string, required: true, description: "Absolute path of the cloud VM private key file on the runner (read-only mount, mode 0600). A path only: key material is never in this config."}
+        ansible_bin: {type: string, required: false, description: "Optional ansible-playbook override (tests use a fake; the runner image uses PATH)."}
+    digitalocean:
+      type: object
+      required: true
+      additionalProperties: false
+      properties:
+        token_env: {type: string, required: true, description: "Environment variable holding the API token, e.g. env://DIGITALOCEAN_API_TOKEN"}
+        region: {type: string, required: true}
+        size: {type: string, required: true}
+        image: {type: string, required: true}
+        ssh_key_id_env: {type: string, required: true, description: "Environment variable holding the DigitalOcean SSH key id or fingerprint"}
+    linode:
+      type: object
+      required: true
+      additionalProperties: false
+      properties:
+        token_env: {type: string, required: true, description: "Environment variable holding the API token, e.g. env://LINODE_API_TOKEN"}
+        region: {type: string, required: true}
+        size: {type: string, required: true}
+        image: {type: string, required: true}
+        ssh_key_id_env: {type: string, required: true, description: "Environment variable holding the Linode SSH key label"}

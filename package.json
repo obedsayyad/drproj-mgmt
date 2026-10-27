@@ -1,0 +1,27 @@
+{
+  "name": "drproj-mgmt",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --workspace-concurrency=1 run typecheck",
+    "test": "vitest run --project contracts --project operations",
+    "test:integration": "vitest run --project integration",
+    "gen:api": "pnpm --filter @drproj/contracts run gen:api",
+    "start:ops": "pnpm --filter @drproj/operations run start",
+    "seed:policy": "pnpm --filter @drproj/operations run seed-policy",
+    "build:web": "pnpm --filter @drproj/operations run build:web"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "openapi-typescript": "7.13.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
+  }
+}

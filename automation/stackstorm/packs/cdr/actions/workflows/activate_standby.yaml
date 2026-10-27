@@ -1,0 +1,191 @@
+version: 1.0
+description: >
+  Activate the idle warm standby (SIMULATED routing) before creating another VM: lease (no wait), recheck (maintenance, cooldown, metrics), routing.
+input:
+  - operation_id
+  - app_key: relief
+vars:
+  - generation: 0
+  - simulated: true
+  - adapter_mode: ''
+  - noop_reason: ''
+  - error: {}
+  - target: ''
+tasks:
+  adapter:
+    action: cdr.adapter_info
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - simulated: <% result().result.simulated %>
+          - adapter_mode: <% result().result.adapter_mode %>
+        do: start
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+      adapter_mode: <% ctx().adapter_mode %>
+    next:
+      - when: <% succeeded() %>
+        do: acquire
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  acquire:
+    action: cdr.acquire_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+        do: step_lease
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - noop_reason: lease_held
+        do: noop_no_lease
+      - when: <% failed() %>
+        publish:
+          - noop_reason: lease_unavailable
+        do: noop_no_lease
+  step_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: lease_acquired
+      status: running
+      message: <% 'capacity lease held at generation ' + str(ctx().generation) %>
+    next:
+      - when: <% succeeded() %>
+        do: gate
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  gate:
+    action: cdr.capacity_gate
+    input:
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() and result().result.proceed %>
+        do: route_warm
+      - when: <% succeeded() and not result().result.proceed %>
+        publish:
+          - noop_reason: <% result().result.noop_reason %>
+        do: noop_release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  route_warm:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: warm
+      mode: active
+    next:
+      - when: <% succeeded() and result().result.applied %>
+        publish:
+          - target: <% result().result.target %>
+        do: verifying
+      - when: <% succeeded() and not result().result.applied %>
+        publish:
+          - noop_reason: no_warm_standby
+        do: noop_release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: warm standby active
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: {target: <% ctx().target %>, adapter: <% ctx().adapter_mode %>, simulated_routing: <% ctx().simulated %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_release:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_no_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: <% ctx().error %>
+      step: workflow_error
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

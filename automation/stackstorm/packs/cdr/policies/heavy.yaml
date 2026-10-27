@@ -1,0 +1,13 @@
+---
+# StackStorm has no resource classes, so heavy work (deploy, Terraform apply/output; Ansible/backup later) runs through the
+# cdr.run_heavy wrapper and this policy keeps it to one at a time per resource_class.
+name: heavy
+description: One cdr.run_heavy per resource_class at a time; further runs are delayed.
+enabled: true
+resource_ref: cdr.run_heavy
+policy_type: action.concurrency.attr
+parameters:
+  action: delay
+  threshold: 1
+  attributes:
+    - resource_class

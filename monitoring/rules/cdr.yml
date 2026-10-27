@@ -1,0 +1,93 @@
+# Alert rules (docs/10). Thresholds follow config/policy-defaults.json: monitoring.stale_after_seconds 30,
+# supabase keep-alive every 6 h (alert at 12 h), daily backup (alert at 26 h), size alert at 400 MB.
+# Node reads these metrics and never acts on them. StackStorm (cdr.alert_intent) maps the `cdr_event` label to an intent:
+# metrics.stale blocks CPU-driven scaling; app.cpu.high/low and app.primary.unhealthy open scale-out/scale-in/primary_failure operations.
+# The policy_version label comes from Prometheus external_labels (prometheus.yml), not from these rules.
+groups:
+  - name: cdr-serving-members
+    rules:
+      # Serving member whose newest CPU sample is older than 30 s. The docs/10 illustration ends in
+      # `cdr_member_serving == 1 > 30`, where `>` binds tighter than `and` and the rule could never fire;
+      # the age comparison is parenthesized here.
+      - alert: CdrServingMemberStale
+        expr: |
+          ((time() - timestamp(node_cpu_seconds_total{role="app",mode="idle",cpu="0"})) > 30)
+            and on(instance) cdr_member_serving == 1
+        labels: { severity: critical, cdr_event: metrics.stale }
+        annotations:
+          summary: "Serving member {{ $labels.instance }} has stale CPU samples"
+      # Serving member with no CPU series at all.
+      - alert: CdrServingMemberMissing
+        expr: |
+          cdr_member_serving == 1
+            unless on(instance) node_cpu_seconds_total{role="app",mode="idle",cpu="0"}
+        labels: { severity: critical, cdr_event: metrics.stale }
+        annotations:
+          summary: "Serving member {{ $labels.instance }} has no CPU series"
+      # Serving member whose relief scrape target is not up. Scoped to job="relief" so a healthy scrape of the same
+      # instance by another job (e.g. node_exporter) cannot mask it; min by (instance) makes any down target win.
+      - alert: CdrServingTargetDown
+        expr: |
+          cdr_member_serving == 1 unless on(instance) (min by (instance) (up{job="relief"}) == 1)
+        labels: { severity: critical, cdr_event: metrics.stale }
+        annotations:
+          summary: "Scrape target of serving member {{ $labels.instance }} is not up"
+      # A vanished membership series must never read as "no members need attention".
+      - alert: CdrMembershipAbsent
+        expr: absent(cdr_member_serving)
+        labels: { severity: critical, cdr_event: metrics.stale }
+        annotations:
+          summary: "No cdr_member_serving series: membership is unknown"
+
+  - name: cdr-capacity-intents
+    rules:
+      # Fleet CPU over the serving members only (idle standby and support hosts excluded), vCPU-weighted because every core is a series.
+      # policy-defaults.json: scale_out.cpu_percent 60 for 30 s, scale_in.cpu_percent 20 for 120 s.
+      - alert: CdrCpuHigh
+        expr: |
+          100 * (1 - sum(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))
+                     / count(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))) > 60
+        for: 30s
+        labels: { severity: warning, cdr_event: app.cpu.high }
+        annotations:
+          summary: "Serving fleet CPU is above 60% for 30 s"
+      - alert: CdrCpuLow
+        expr: |
+          100 * (1 - sum(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))
+                     / count(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))) < 20
+        for: 120s
+        labels: { severity: info, cdr_event: app.cpu.low }
+        annotations:
+          summary: "Serving fleet CPU is below 20% for 120 s"
+      # P4: the primary's relief scrape target. HAProxy health (3 failed checks) replaces it as the signal in P6.
+      - alert: CdrPrimaryUnhealthy
+        expr: |
+          (cdr_member_serving{role="primary"} == 1) unless on(instance) (min by (instance) (up{job="relief"}) == 1)
+        for: 30s
+        labels: { severity: critical, cdr_event: app.primary.unhealthy }
+        annotations:
+          summary: "Primary {{ $labels.instance }} is not answering"
+
+  - name: cdr-dependencies
+    rules:
+      # No blackbox targets exist yet (P5/P6); the rule is in place so the first probe is covered.
+      - alert: CdrBackendCertExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 14 * 86400
+        labels: { severity: warning }
+        annotations:
+          summary: "Backend certificate for {{ $labels.instance }} expires in under 14 days"
+      - alert: CdrSupabaseDbSizeHigh
+        expr: cdr_supabase_db_size_bytes > 400 * 1024 * 1024
+        labels: { severity: warning }
+        annotations:
+          summary: "Supabase database is above 400 MB (Free limit 500 MB)"
+      - alert: CdrSupabaseKeepaliveStale
+        expr: time() - cdr_supabase_keepalive_last_success_timestamp > 12 * 3600
+        labels: { severity: warning }
+        annotations:
+          summary: "Last successful Supabase keep-alive is older than 12 hours"
+      - alert: CdrBackupStale
+        expr: time() - cdr_backup_latest_capture_timestamp > 26 * 3600
+        labels: { severity: warning }
+        annotations:
+          summary: "Latest captured backup is older than 26 hours"

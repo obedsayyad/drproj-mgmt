@@ -1,0 +1,13 @@
+---
+name: provider_create
+pack: cdr
+description: Create one project-tagged VM via the provider adapter (assert_lease right before the call).
+runner_type: python-script
+entry_point: provider_create.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  slot_key: {type: string, required: true}
+  attempt: {type: integer, required: true}

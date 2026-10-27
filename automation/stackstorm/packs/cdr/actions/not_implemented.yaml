@@ -1,0 +1,11 @@
+---
+name: not_implemented
+pack: cdr
+description: "A planned workflow step whose implementation belongs to a later phase: always fails with not_implemented so a skeleton workflow can never pretend to succeed."
+runner_type: python-script
+entry_point: not_implemented.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  step: {type: string, required: true}
+  phase: {type: string, required: true}

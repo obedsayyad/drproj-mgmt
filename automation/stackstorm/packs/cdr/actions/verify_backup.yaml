@@ -1,0 +1,9 @@
+---
+name: verify_backup
+pack: cdr
+description: "Isolated restore verification of a backup (docs/09): not implemented until P7. Fails with not_implemented."
+runner_type: orquesta
+entry_point: workflows/verify_backup.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}

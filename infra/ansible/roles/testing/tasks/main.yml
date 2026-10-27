@@ -1,0 +1,5 @@
+---
+- name: Fail because the testing role is not implemented yet (P8)
+  ansible.builtin.fail:
+    msg: "not_implemented: the testing role lands in P8 (docs/11)"
+  tags: [testing, not_implemented]

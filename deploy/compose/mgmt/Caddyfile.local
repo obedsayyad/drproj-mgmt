@@ -1,0 +1,12 @@
+# LOCAL ONLY (Docker Desktop T31 run): Caddy's internal CA, no ACME, ops site only.
+{
+	local_certs
+	skip_install_trust
+}
+
+import snippets.caddy
+
+{$OPS_HOST} {
+	tls internal
+	import ops_site
+}

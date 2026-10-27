@@ -1,0 +1,14 @@
+---
+name: release_slot
+pack: cdr
+description: "Free a releasing slot. evidence must be {confirmed_absent: true, source: provider_api, observed_at: <timestamp>}."
+runner_type: python-script
+entry_point: release_slot.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  slot_key: {type: string, required: true}
+  slot_generation: {type: integer, required: true}
+  evidence: {type: object, required: true}

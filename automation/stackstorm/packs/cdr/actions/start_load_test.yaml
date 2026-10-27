@@ -1,0 +1,9 @@
+---
+name: start_load_test
+pack: cdr
+description: "Start a bounded k6 load test: not implemented until P6/P8. Fails with not_implemented."
+runner_type: orquesta
+entry_point: workflows/start_load_test.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}

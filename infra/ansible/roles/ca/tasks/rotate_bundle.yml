@@ -1,0 +1,52 @@
+---
+# Rotation steps 1 and 2: create the new CA, build a bundle holding old AND new, deploy it to every verifier. Leaves are untouched.
+- name: Create the new CA on the management VM
+  when: inventory_hostname == ca_mgmt_host
+  become: true
+  block:
+    - name: Generate the new CA key
+      ansible.builtin.command:
+        argv: [openssl, genpkey, -algorithm, EC, -pkeyopt, "ec_paramgen_curve:P-256", -out, "{{ ca_dir }}/{{ ca_new_key_name }}"]
+        creates: "{{ ca_dir }}/{{ ca_new_key_name }}"
+    - name: Restrict the new CA key
+      ansible.builtin.file:
+        path: "{{ ca_dir }}/{{ ca_new_key_name }}"
+        owner: root
+        group: root
+        mode: "0400"
+    - name: Self-sign the new CA certificate
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -new
+          - -key
+          - "{{ ca_dir }}/{{ ca_new_key_name }}"
+          - -days
+          - "{{ ca_ca_days }}"
+          - -sha256
+          - -subj
+          - /CN=drproj-backend-ca-new
+          - -addext
+          - basicConstraints=critical,CA:TRUE,pathlen:0
+          - -addext
+          - keyUsage=critical,keyCertSign,cRLSign
+          - -out
+          - "{{ ca_dir }}/{{ ca_new_cert_name }}"
+        creates: "{{ ca_dir }}/{{ ca_new_cert_name }}"
+    - name: Read the old and new certificates
+      ansible.builtin.slurp:
+        src: "{{ ca_dir }}/{{ item }}"
+      loop: ["{{ ca_cert_name }}", "{{ ca_new_cert_name }}"]
+      register: ca_both
+    - name: Write the bundle holding both
+      ansible.builtin.copy:
+        content: "{{ ca_both.results[0].content | b64decode }}{{ ca_both.results[1].content | b64decode }}"
+        dest: "{{ ca_dir }}/{{ ca_bundle_name }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Deploy the bundle to this verifier
+  ansible.builtin.include_tasks: distribute_bundle.yml

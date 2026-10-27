@@ -1,0 +1,12 @@
+---
+name: failover_target
+pack: cdr
+description: "Ensure exactly one elastic VM after a primary failure: resume own slot, reuse an existing one, else reserve on the non-warm provider (warm provider only as fallback)."
+runner_type: python-script
+entry_point: failover_target.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  wait_seconds: {type: integer, default: 60}
+  poll_seconds: {type: integer, default: 5}

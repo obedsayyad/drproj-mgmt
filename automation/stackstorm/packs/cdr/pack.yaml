@@ -1,0 +1,9 @@
+---
+ref: cdr
+name: cdr
+description: Cloud compute allocation and disaster recovery demo automation (keep-alive, Alertmanager alert recording).
+keywords: [cdr, supabase, keepalive, alertmanager]
+version: 0.1.0
+python_versions: ["3"]
+author: drproj
+email: noreply@example.invalid

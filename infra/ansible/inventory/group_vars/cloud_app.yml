@@ -1,0 +1,14 @@
+---
+# Cloud VMs have no known host key before their first connection (Terraform just created them). This is the one documented first-contact
+# exception (docs/15): accept-new pins the key on first contact and refuses any later change. Fixed hosts never use it.
+ansible_ssh_common_args: "-o StrictHostKeyChecking=accept-new"
+bootstrap_host_key_policy: accept-new
+
+# User switch: inventory/cloud_app.py sets cloud_first_contact_user (the Terraform-provisioned login, default root) and no ansible_user.
+# playbooks/app.yml connects as that user for the bootstrap play only; every other play uses the deploy user below.
+ansible_user: "{{ bootstrap_deploy_user }}"
+
+# Terraform already installed the cloud key for the first-contact user: copy it to the deploy user (no .pub on the controller) and leave
+# sshd as the provider image configured it (the self-hosted fixed hosts keep the full hardening).
+bootstrap_authorize_from_connecting_user: true
+bootstrap_harden_sshd: false

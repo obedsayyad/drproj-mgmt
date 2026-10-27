@@ -1,0 +1,16 @@
+---
+name: fail_operation
+pack: cdr
+description: "Failure handler: lease_lost leaves the operation reconciling; any other error fails it and releases the lease. Idempotent, safe to retry."
+runner_type: python-script
+entry_point: fail_operation.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, default: 0}
+  # The failed task's execution result is always an object ({stdout, stderr, exit_code, result} or a sub-workflow's
+  # {output, errors}). An untyped parameter defaults to string in st2 and rejected it, so the handler never started.
+  error: {type: object}
+  step: {type: string, default: failed}
+  app_key: {type: string, default: relief}

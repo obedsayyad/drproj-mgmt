@@ -1,0 +1,14 @@
+---
+name: standby_verify
+pack: cdr
+description: "Done criteria of a standby repair: ready, deployed digest matches the pinned one, routing shows the server UP as backup (simulated until P6)."
+runner_type: python-script
+entry_point: standby_verify.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  slot_key: {type: string, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  resource_id: {type: string, required: true}

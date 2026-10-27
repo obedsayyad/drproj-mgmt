@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/coverage
+.env
+.env.*
+!.env.example
+docs
+tests
+deploy
+automation
+**/*.test.ts
+.git
+secrets
+!automation/runner/requirements.yml

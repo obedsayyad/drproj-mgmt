@@ -1,0 +1,12 @@
+---
+name: keepalive_every_6h
+pack: cdr
+description: Supabase Free keep-alive every 6 hours (runtime.supabase_keepalive_interval_hours).
+enabled: true
+trigger:
+  type: core.st2.IntervalTimer
+  parameters:
+    unit: hours
+    delta: 6
+action:
+  ref: cdr.keepalive

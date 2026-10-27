@@ -1,0 +1,8 @@
+---
+# Scaffold (P6/P7): the role reports not_implemented until then.
+- name: Configure the mgmt host
+  hosts: management
+  become: true
+  roles:
+    - role: mgmt
+      tags: [mgmt]

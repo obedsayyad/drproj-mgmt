@@ -1,0 +1,14 @@
+---
+name: reserve_slot
+pack: cdr
+description: Reserve one capacity slot transactionally (fenced by the lease). Result reserved=false means no capacity.
+runner_type: python-script
+entry_point: reserve_slot.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  kind: {type: string, required: true, enum: [elastic, warm, interim_warm]}
+  simulated: {type: boolean, required: true, description: "true when the provider adapter is the local simulation."}

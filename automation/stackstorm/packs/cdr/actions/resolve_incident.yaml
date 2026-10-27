@@ -1,0 +1,12 @@
+---
+name: resolve_incident
+pack: cdr
+description: "Resolve the open incident of a fingerprint."
+runner_type: python-script
+entry_point: resolve_incident.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  fingerprint: {type: string, required: true}
+  message: {type: string, required: true}
+  operation_id: {type: string}

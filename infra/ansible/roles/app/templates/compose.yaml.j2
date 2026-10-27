@@ -1,0 +1,55 @@
+# Managed by Ansible (app role). Vendored from drproj-app deploy/compose/app/compose.yaml; tests/test_env_parity.py keeps the variable names in step.
+# Application VM stack (docs/08): the same pinned relief image on primary, DigitalOcean and Linode,
+# plus node_exporter. No local business state, so there are no named volumes. Image tags default to
+# the values in docs/config/deployment-inputs.example.json (versions.*, "unverified until smoke").
+# mem_limit values are INITIAL ceilings for the 1 vCPU / 1 GB cloud VM; measure on the VM (T18-style).
+name: drproj-app
+
+services:
+  relief:
+    restart: unless-stopped
+    image: ${RELIEF_IMAGE:-drproj-relief:local}
+    mem_limit: 384m
+    # Backend TLS (APP_TLS_CERT_FILE/KEY) from the project CA; metrics on 9464 are scraped by Prometheus.
+    # Direct-IP access is not blocked at the network layer (accepted risk, docs/12).
+    ports:
+      - "${APP_PORT:-8443}:8443"
+      - "${APP_METRICS_PORT:-9464}:9464"
+    env_file: [.env]
+    environment:
+      APP_PORT: 8443
+      APP_METRICS_PORT: 9464
+      APP_TLS_CERT_FILE: /run/tls/app.crt
+      APP_TLS_KEY_FILE: /run/tls/app.key
+    volumes:
+      - ./certs/app.crt:/run/tls/app.crt:ro
+      - ./certs/app.key:/run/tls/app.key:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('https').get({host:'127.0.0.1',port:8443,path:'/health/live',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+      start_period: 20s
+
+  node_exporter:
+    restart: unless-stopped
+    image: prom/node-exporter:v${NODE_EXPORTER_TAG:-1.12.1}
+    mem_limit: 64m
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=0.0.0.0:9100
+      # TLS + basic auth (docs/08). Rendered from node-exporter-web-config.example.yml by Ansible (P5).
+      - --web.config.file=/etc/node_exporter/web-config.yml
+    ports: ["${NODE_EXPORTER_PORT:-9100}:9100"]
+    volumes:
+      - /:/host:ro,rslave
+      - ./node-exporter-web-config.yml:/etc/node_exporter/web-config.yml:ro
+      - ./certs/app.crt:/etc/node_exporter/tls.crt:ro
+      - ./certs/app.key:/etc/node_exporter/tls.key:ro
+    healthcheck:
+      # TCP only: a real request needs TLS and credentials, which the health probe must not carry.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9100"]
+      interval: 15s
+      timeout: 3s
+      retries: 3

@@ -1,0 +1,12 @@
+---
+name: reconcile_pass
+pack: cdr
+description: "One reconcile pass: adopt live executions, resume or interrupt dead ones, resolve held slots by tag scan, hold and report orphans (never deletes). lease_generation 0 = read-only."
+runner_type: python-script
+entry_point: reconcile_pass.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, default: 0}
+  previous_holder: {type: string, default: ''}
+  app_key: {type: string, default: relief}

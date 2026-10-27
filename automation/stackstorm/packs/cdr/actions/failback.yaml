@@ -1,0 +1,9 @@
+---
+name: failback
+pack: cdr
+description: "Automatic failback to the primary (docs/04): not implemented until P6 (HAProxy routing). Fails with not_implemented."
+runner_type: orquesta
+entry_point: workflows/failback.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}

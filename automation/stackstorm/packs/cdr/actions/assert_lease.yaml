@@ -1,0 +1,12 @@
+---
+name: assert_lease
+pack: cdr
+description: Fail with lease_lost unless the operation still holds the capacity lease at this fencing generation.
+runner_type: python-script
+entry_point: assert_lease.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  generation: {type: integer, required: true}
+  app_key: {type: string, default: relief}

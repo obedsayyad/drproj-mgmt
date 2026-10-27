@@ -1,0 +1,12 @@
+---
+name: acquire_lease
+pack: cdr
+description: Take the capacity lease for an operation (re-entrant). Returns acquired=false while another operation holds a live lease; an expired lease is taken over only by a reconcile operation.
+runner_type: python-script
+entry_point: acquire_lease.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}
+  ttl_seconds: {type: integer, default: 120}

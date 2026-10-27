@@ -1,0 +1,9 @@
+---
+name: dispatch
+pack: cdr
+description: "Start capacity executions through the StackStorm API (reconcile resumes)."
+runner_type: python-script
+entry_point: dispatch.py
+enabled: true
+parameters:
+  runs: {type: array, required: true}

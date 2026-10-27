@@ -1,0 +1,47 @@
+# Self, ops, alertmanager, plus an (initially empty) file_sd job for relief app VMs. node_exporter targets
+# (TLS + basic auth) and blackbox cert probes arrive in P5/P6. Rules: monitoring/rules (mounted below).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+  external_labels:
+    # Rewritten by cdr.apply_policy (automation/stackstorm/packs/cdr/actions/lib/prom_render.py) on every policy activation:
+    # PromQL cannot turn the value of cdr_policy_active_version into a label, so alerts carry it from here. The compose
+    # wiring that lets StackStorm write this file and reload Prometheus is P6 (docs/11); until then it is rendered by hand.
+    policy_version: "1"
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels: { role: management }
+
+  # Internal-only listener (OPS_METRICS_PORT); not published and not routed through Caddy.
+  - job_name: ops
+    static_configs:
+      - targets: ["ops:9465"]
+        labels: { role: management }
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+        labels: { role: management }
+
+  # Relief app VMs (P5). file_sd entries carry role="app" and the VM public address as the target
+  # (host:9464). The relief series' own instance_id label is kept; `instance` becomes <host>:9100 so
+  # relief series join cdr_member_serving and node_exporter series on(instance) (docs/10).
+  - job_name: relief
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/relief/*.json"]
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+)(?::[0-9]+)?"
+        target_label: instance
+        replacement: "$1:9100"

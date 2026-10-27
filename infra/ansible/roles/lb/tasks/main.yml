@@ -1,0 +1,5 @@
+---
+- name: Fail because the lb role is not implemented yet (P6)
+  ansible.builtin.fail:
+    msg: "not_implemented: the lb role lands in P6 (docs/11)"
+  tags: [lb, not_implemented]

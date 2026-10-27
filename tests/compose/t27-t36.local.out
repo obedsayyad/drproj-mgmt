@@ -1,0 +1,190 @@
+T27/T36 LOCAL SIMULATION RUN - Docker Desktop on a developer Mac (arm64), NOT the management VM, no cloud resources
+provider adapter: simulation (flock'd JSON on the st2 volume); every instance row must carry simulated=true
+StackStorm images run as linux/amd64 (emulated on arm64); timings are NOT representative of the 2 vCPU / 4 GB VM
+date: 2026-10-26T19:09:48Z
+--- 1. Postgres, migrations through ops/0013, test policy
+PASS localpg healthy
+      app/0001_app_schema.sql
+      app/0002_runtime_readiness_grant.sql
+PASS ops/0012 and ops/0013 applied (7)
+PASS st2 login role is a member of dr_ops and dr_automation
+    {"msg":"policy version 1 seeded"}
+    active policy: 1|[30, 45, 60]|60|10  (version, checkpoints, deadline, renewal)
+--- 2. StackStorm (emulated amd64: slow)
+PASS mongo, rabbitmq, redis healthy
+PASS st2api healthy
+PASS st2 services healthy
+PASS st2-register --register-all (actions, workflows, policies, pack config)
+PASS st2 token obtained (not printed)
+PASS reconcile timer rule disabled for deterministic assertions
+    observed: packs.setup_virtualenv did not complete (see t16-t30.local.out); finishing the venv from requirements.txt
+PASS st2actionrunner healthy
+PASS pack virtualenv has psycopg
+PASS simulation state dir on the st2 volume
+--- 3. registration: workflows, policies, actions/lib import on the live st2
+PASS action cdr.scale_out registered
+PASS action cdr.provision_and_deploy registered
+PASS action cdr.provision_attempt registered
+PASS action cdr.run_heavy registered
+PASS action cdr.reconcile registered
+PASS action cdr.reconcile_pass registered
+PASS action cdr.primary_failure registered
+PASS action cdr.scale_in registered
+PASS action cdr.activate_standby registered
+PASS action cdr.alert_intent registered
+PASS action cdr.open_operation registered
+PASS action cdr.provider_create registered
+PASS policies registered (cdr.capacity_guard.activate_standby,cdr.capacity_guard.apply_policy,cdr.capacity_guard.primary_failure,cdr.capacity_guard.scale_in,cdr.capacity_guard.scale_out,cdr.capacity_guard.standby_repair,cdr.heavy,cdr.reconcile_single)
+PASS actions/lib imports on live st2 (cdr.adapter_info -> status adapter simulated) (succeeded simulation True)
+PASS action cdr.standby_repair registered
+PASS action cdr.standby_unhealthy registered
+PASS action cdr.standby_classify registered
+PASS action cdr.standby_verify registered
+PASS action cdr.provider_power_on registered
+PASS action cdr.apply_policy registered
+PASS action cdr.policy_validate registered
+PASS action cdr.policy_compile registered
+PASS action cdr.policy_verify registered
+PASS action cdr.policy_activate registered
+PASS action cdr.policy_rollback registered
+PASS action cdr.not_implemented registered
+PASS action cdr.failback registered
+PASS action cdr.start_load_test registered
+PASS action cdr.stop_load_test registered
+PASS action cdr.create_backup registered
+PASS action cdr.verify_backup registered
+PASS action cdr.restore_application registered
+--- 4. T27: warm standby repair, each classification driven by faults -> the expected path (local simulation, not real infrastructure)
+    4a. healthy (the record was stale): only state is written back, nothing is created, deployed or powered
+PASS no live lease and no non-terminal operation before T27h (0 0)
+PASS producer opened a standby_repair operation (simulation) (standby_repair 1)
+PASS repair succeeded through the healthy path (succeeded healthy)
+PASS standby.unhealthy and standby.repaired events recorded (standby.unhealthy,standby.repaired)
+PASS no create, deploy (beyond the fixture's own), power-on or delete (0 0 0 0)
+PASS ready, digest matches the pinned one, routing backup (database and simulated routing map) (ready true backup backup)
+    4b. (a) present but the app is broken -> redeploy into the same VM
+PASS no live lease and no non-terminal operation before T27a (0 0)
+PASS repair succeeded through the redeploy path (succeeded redeploy)
+PASS exactly one deploy of the SAME resource, no create, no power-on, no delete (1 0 0 0 False)
+PASS ready with the pinned digest and routing backup (HAProxy view simulated) (ready true backup backup)
+PASS the warm slot kept its generation (no release, no new reservation) (2)
+PASS the slot was never released (0)
+PASS events validate against events.schema.json (ok)
+PASS lease released (free)
+    4c. (b) powered off -> power on, then redeploy
+PASS no live lease and no non-terminal operation before T27b (0 0)
+PASS repair succeeded through the power-on path (succeeded power_on_redeploy)
+PASS one power-on, then one deploy; no create, no delete; the VM is on again (1 1 0 0 on)
+PASS power-on happened before the deploy (True)
+PASS ready, pinned digest, routing backup (ready true backup backup)
+    4d. (c) confirmed absent -> release with absence evidence, reserve the warm slot again, provision into it
+PASS no live lease and no non-terminal operation before T27c (0 0)
+PASS repair succeeded through the reprovision path (succeeded reprovision)
+PASS slot released once with provider-API absence evidence, then reserved and bound again (1 1 1)
+PASS the warm slot has a new generation and is bound to a NEW resource (true true bound)
+PASS exactly one create (the replacement), tagged for the warm slot of this operation; the old resource stays gone (1 True warm True digitalocean)
+PASS ready, pinned digest, routing backup (ready true backup backup)
+PASS one warm-role slot bound (1)
+    4e. (d) provider answer unknown -> hold the slot, incident standby.uncertain, backoff to reconcile, NO create
+PASS no live lease and no non-terminal operation before T27d (0 0)
+PASS operation failed held_uncertain (nothing was repaired) (failed held_uncertain)
+PASS ZERO creates, deploys, power-ons and deletes on either provider (0 0 0 0)
+PASS the warm slot is held_uncertain and still counted (held_uncertain 1)
+PASS one open critical standby.uncertain:warm incident (1)
+PASS no interim warm was reserved (the other provider does not answer either) (0)
+PASS the resource was not touched (False)
+PASS lease released (free)
+--- 5. T36: warm provider api_unknown -> interim warm on the OTHER provider; both slots counted; after reconcile exactly one warm-role slot
+PASS no live lease and no non-terminal operation before T36 (0 0)
+    5a. the first standby is provisioned by the repair workflow itself (free warm slot -> reserve -> provision), so reconcile can later resolve it by its attempt tags
+PASS initial standby provisioned through the reprovision path (succeeded reprovision)
+PASS warm slot bound on digitalocean (the warm provider), attempt recorded as ready (bound digitalocean 1)
+    5b. digitalocean stops answering: the repair holds the warm slot and reserves interim-warm-linode
+PASS repair succeeded through the interim path (succeeded interim)
+PASS warm slot held_uncertain, interim-warm-linode bound (interim-warm-linode=bound warm=held_uncertain)
+PASS the cap count includes the held warm slot on digitalocean and the interim slot on linode (digitalocean=1 linode=1)
+PASS exactly one create happened, on linode; none on the warm provider (1 0)
+PASS the interim VM carries the interim slot tag (interim-warm-linode linode)
+PASS the interim standby is ready with the pinned digest and routing backup (ready true backup backup)
+PASS one open standby.uncertain:warm incident (1)
+    5c. a reservation beyond the cap is refused (linode cap lowered to 1 for the probe; the interim slot occupies it)
+PASS an elastic reservation on linode is refused (0)
+PASS the held warm slot also still counts against digitalocean (1)
+    5d. digitalocean answers again: reconcile resolves the warm slot (attempt tags), requests a repair, the repair restores it; reconcile then drains the surplus interim
+PASS reconcile succeeded (succeeded)
+PASS reconcile resolved the held warm slot with provider-API evidence (1)
+PASS reconcile opened exactly one standby repair for it (1)
+PASS the requested repair succeeded (healthy path: the VM was fine, the record was not) (succeeded healthy)
+PASS both warm-role slots are bound for a moment (surplus) (2)
+PASS second reconcile succeeded (succeeded)
+PASS reconcile opened the surplus scale-in (1)
+PASS scale_in succeeded with a real removal (no noop reason) (succeeded -)
+PASS exactly ONE warm-role slot bound after resolution: the original warm slot (1 warm)
+PASS the surplus slot was released with provider-API absence evidence (free 1)
+PASS exactly one delete, of the interim VM; the warm VM is untouched (1 1 True)
+PASS slot counts back to one warm VM on digitalocean, none on linode (1 digitalocean)
+PASS the warm standby serves as backup again (ready backup backup)
+--- 6. apply_policy (P4 scope): validate -> Prometheus policy_version label re-rendered + reload (SIMULATED) -> verify -> activate; failure keeps the old version
+PASS simulated Prometheus seeded with a copy of deploy/compose/mgmt/prometheus/prometheus.yml
+PASS seeded label is the active version (1)
+PASS no live lease and no non-terminal operation before policy (0 0)
+    6a. happy path (scale_out.cooldown_seconds 60 -> 90; no capacity change, so no lease)
+PASS apply_policy succeeded (succeeded -)
+PASS new version active, old superseded, phase completed (1=superseded/completed 2=active/completed)
+PASS Prometheus label re-rendered AND loaded (file and the config the simulated reload made live) (2 2)
+PASS exactly one simulated reload (1)
+PASS events: started, policy.apply.requested, succeeded (operation.started,policy.apply.requested,operation.succeeded)
+PASS no capacity lease was taken (the fencing generation did not move) (12)
+PASS events validate against events.schema.json (ok)
+    6b. failed activation: the reload fails -> old version stays active, new one failed, label restored
+PASS apply_policy failed with reload_failed (failed reload_failed)
+PASS the old version is still active; the new one is failed with the error recorded (1=superseded 2=active 3=failed reload_failed)
+PASS the label in the file is back to the active version and nothing newer was loaded (2 2)
+    6c. a cap lowered below the occupied count: pending transition, nothing deleted, no new reservation above the cap (exclusive lease)
+PASS apply_policy succeeded and reports the pending transition (succeeded - linode:3>2)
+PASS version active (active)
+PASS the three linode slots are still bound and nothing was deleted (3 0)
+PASS a new reservation on linode is refused (0)
+PASS the exclusive lease was taken once (generation +1) and released (1 free)
+    6d. a change whose compile target is a later phase (HAProxy health) fails not_implemented and applies nothing
+PASS apply_policy failed not_implemented (failed not_implemented)
+PASS the detail names the HAProxy setting (health.interval_seconds)
+PASS active version unchanged, the new one failed, no reload happened (active failed 0)
+--- 7. P6/P7 skeletons: an accidental trigger fails the operation with not_implemented and touches nothing
+PASS no live lease and no non-terminal operation before skeleton (0 0)
+PASS failback: operation failed with code not_implemented (failed not_implemented)
+PASS failback: the failing step is the first planned step (direct_probes) (direct_probes)
+PASS failback: no lease, no slot change, no adapter call (free a4d7aa312d4663715bba76102630de76 1)
+PASS failback: no success event (0)
+PASS failback: events validate against events.schema.json (ok)
+PASS start_load_test: operation failed with code not_implemented (failed not_implemented)
+PASS start_load_test: the failing step is the first planned step (validate_bounds) (validate_bounds)
+PASS start_load_test: no lease, no slot change, no adapter call (free a4d7aa312d4663715bba76102630de76 1)
+PASS start_load_test: no success event (0)
+PASS start_load_test: events validate against events.schema.json (ok)
+PASS stop_load_test: operation failed with code not_implemented (failed not_implemented)
+PASS stop_load_test: the failing step is the first planned step (stop_k6) (stop_k6)
+PASS stop_load_test: no lease, no slot change, no adapter call (free a4d7aa312d4663715bba76102630de76 1)
+PASS stop_load_test: no success event (0)
+PASS stop_load_test: events validate against events.schema.json (ok)
+PASS create_backup: operation failed with code not_implemented (failed not_implemented)
+PASS create_backup: the failing step is the first planned step (backup_lease) (backup_lease)
+PASS create_backup: no lease, no slot change, no adapter call (free a4d7aa312d4663715bba76102630de76 1)
+PASS create_backup: no success event (0)
+PASS create_backup: events validate against events.schema.json (ok)
+PASS verify_backup: operation failed with code not_implemented (failed not_implemented)
+PASS verify_backup: the failing step is the first planned step (isolated_restore) (isolated_restore)
+PASS verify_backup: no lease, no slot change, no adapter call (free a4d7aa312d4663715bba76102630de76 1)
+PASS verify_backup: no success event (0)
+PASS verify_backup: events validate against events.schema.json (ok)
+PASS restore_application: operation failed with code not_implemented (failed not_implemented)
+PASS restore_application: the failing step is the first planned step (validate_verified_backup) (validate_verified_backup)
+PASS restore_application: no lease, no slot change, no adapter call (free a4d7aa312d4663715bba76102630de76 1)
+PASS restore_application: no success event (0)
+PASS restore_application: events validate against events.schema.json (ok)
+--- 8. runner stayed up
+    st2actionrunner restart count: 1 (expected equal to the start: 1)
+PASS no st2actionrunner restart during the run (1)
+--- summary
+passed=156 failed=0
+--- cleanup

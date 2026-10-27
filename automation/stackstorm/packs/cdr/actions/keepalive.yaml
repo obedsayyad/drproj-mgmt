@@ -1,0 +1,8 @@
+---
+name: keepalive
+pack: cdr
+description: SELECT 1 against Supabase and record the outcome in ops.keepalive_runs.
+runner_type: python-script
+entry_point: keepalive.py
+enabled: true
+parameters: {}

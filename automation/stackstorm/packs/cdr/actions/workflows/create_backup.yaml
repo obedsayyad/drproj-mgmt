@@ -1,0 +1,99 @@
+version: 1.0
+description: >
+  SKELETON (P7). Daily app-schema pg_dump (docs/09): not implemented until P7. Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
+  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
+  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+input:
+  - operation_id
+vars:
+  - error: {}
+  - failed_step: ''
+tasks:
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+    next:
+      - when: <% succeeded() %>
+        do: backup_lease
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  backup_lease:
+    action: cdr.not_implemented
+    input:
+      step: backup_lease
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: pg_dump_capture
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: backup_lease
+        do: fail_handler
+  pg_dump_capture:
+    action: cdr.not_implemented
+    input:
+      step: pg_dump_capture
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: record_artifact
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: pg_dump_capture
+        do: fail_handler
+  record_artifact:
+    action: cdr.not_implemented
+    input:
+      step: record_artifact
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: verify_after_capture
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: record_artifact
+        do: fail_handler
+  verify_after_capture:
+    action: cdr.not_implemented
+    input:
+      step: verify_after_capture
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: expire_old
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: verify_after_capture
+        do: fail_handler
+  expire_old:
+    action: cdr.not_implemented
+    input:
+      step: expire_old
+      phase: P7
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: expire_old
+        do: fail_handler
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      error: <% ctx().error %>
+      step: <% ctx().failed_step or 'start' %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

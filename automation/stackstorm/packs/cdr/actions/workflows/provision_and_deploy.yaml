@@ -1,0 +1,111 @@
+version: 1.0
+description: >
+  Provision one VM into an already reserved slot. Attempts run through cdr.provision_attempt; a cleaned attempt is
+  retried once on the same provider, then on the other provider (cap and availability permitting), then the
+  workflow raises one infrastructure.provision.exhausted incident and stops. An uncertain attempt stops at once
+  with the slot held (no retry, no fallback).
+input:
+  - operation_id
+  - lease_generation
+  - provider
+  - slot_key
+  - slot_generation
+  - first_attempt: 1
+  - attempts_done: {}
+  - slot_kind: elastic
+vars:
+  - attempts: <% ctx().attempts_done %>
+  - attempt_no: <% ctx().first_attempt %>
+  - cur_provider: ''
+  - cur_slot_key: ''
+  - cur_slot_generation: 0
+  - final: ''
+  - resource_id: ''
+  - ip: ''
+output:
+  - result: <% ctx().final %>
+  - provider: <% ctx().cur_provider %>
+  - slot_key: <% ctx().cur_slot_key %>
+  - slot_generation: <% ctx().cur_slot_generation %>
+  - resource_id: <% ctx().resource_id %>
+  - attempts: <% ctx().attempts %>
+tasks:
+  init:
+    action: core.noop
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - cur_provider: <% ctx().provider %>
+          - cur_slot_key: <% ctx().slot_key %>
+          - cur_slot_generation: <% ctx().slot_generation %>
+        do: run_attempt
+
+  run_attempt:
+    action: cdr.provision_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      provider: <% ctx().cur_provider %>
+      slot_key: <% ctx().cur_slot_key %>
+      slot_generation: <% ctx().cur_slot_generation %>
+      attempt: <% ctx().attempt_no %>
+    next:
+      - when: <% succeeded() and result().output.result = 'ready' %>
+        publish:
+          - attempts: <% ctx().attempts.set(ctx().cur_provider, ctx().attempts.get(ctx().cur_provider, 0) + 1) %>
+          - final: ready
+          - resource_id: <% result().output.resource_id %>
+          - ip: <% result().output.ip %>
+      - when: <% succeeded() and result().output.result = 'uncertain' %>
+        publish:
+          - attempts: <% ctx().attempts.set(ctx().cur_provider, ctx().attempts.get(ctx().cur_provider, 0) + 1) %>
+          - final: uncertain
+      - when: <% succeeded() and result().output.result = 'cleaned' %>
+        publish:
+          - attempts: <% ctx().attempts.set(ctx().cur_provider, ctx().attempts.get(ctx().cur_provider, 0) + 1) %>
+        do: plan
+
+  plan:
+    action: cdr.plan_next_attempt
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().lease_generation %>
+      provider: <% ctx().cur_provider %>
+      attempts: <% ctx().attempts %>
+      slot_kind: <% ctx().slot_kind %>
+    next:
+      - when: <% succeeded() and result().result.plan != 'exhausted' %>
+        publish:
+          - cur_provider: <% result().result.provider %>
+          - cur_slot_key: <% result().result.slot_key %>
+          - cur_slot_generation: <% result().result.slot_generation %>
+          - attempt_no: <% result().result.attempt %>
+        do: run_attempt
+      - when: <% succeeded() and result().result.plan = 'exhausted' %>
+        do: raise_exhausted
+
+  raise_exhausted:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'provision.exhausted:' + ctx().operation_id %>
+      severity: critical
+      source: automation
+      description: <% 'provisioning exhausted after ' + str(ctx().attempts.values().sum()) + ' attempts; no automatic restart' %>
+      resources: <% ctx().attempts.keys().select(str($)).toList() %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: emit_exhausted
+
+  emit_exhausted:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: infrastructure.provision.exhausted
+      step: provision_exhausted
+      status: running
+      message: provisioning exhausted; an explicit new intent is required to start again
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - final: exhausted

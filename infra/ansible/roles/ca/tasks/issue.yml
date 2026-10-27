@@ -1,0 +1,152 @@
+---
+# Issue or renew the backend TLS leaf of one application host. The leaf key is generated ON the host and never leaves it; only the CSR
+# travels to the management VM, where the CA key signs it. Renewal happens when the leaf has fewer than ca_leaf_renew_before_days left,
+# or when ca_force_reissue is true (rotation step 3).
+- name: Create the certificate directory on the host
+  ansible.builtin.file:
+    path: "{{ ca_leaf_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+- name: Look for an existing leaf certificate
+  ansible.builtin.stat:
+    path: "{{ ca_leaf_dir }}/app.crt"
+  register: ca_leaf_stat
+  become: true
+
+- name: Check how long the existing leaf is still valid
+  ansible.builtin.command: "openssl x509 -checkend {{ ca_leaf_renew_before_days * 86400 }} -noout -in {{ ca_leaf_dir }}/app.crt"
+  register: ca_leaf_check
+  changed_when: false
+  failed_when: false
+  become: true
+  when: ca_leaf_stat.stat.exists
+
+- name: Decide whether to issue
+  ansible.builtin.set_fact:
+    ca_leaf_needed: "{{ not ca_leaf_stat.stat.exists or (ca_leaf_check.rc | default(1)) != 0 or (ca_force_reissue | bool) }}"
+    ca_leaf_san: "IP:{{ ansible_host | default(inventory_hostname) }},DNS:{{ inputs.ingress.application }}"
+    ca_leaf_cn: "{{ instance_id | default(inventory_hostname) }}"
+
+- name: Issue the leaf certificate
+  when: ca_leaf_needed | bool
+  block:
+    - name: Generate the leaf key and CSR on the host
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -new
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:prime256v1
+          - -nodes
+          - -keyout
+          - "{{ ca_leaf_dir }}/app.key.new"
+          - -out
+          - "{{ ca_leaf_dir }}/app.csr"
+          - -subj
+          - "/CN={{ ca_leaf_cn }}"
+      changed_when: true
+      become: true
+
+    - name: Read the CSR
+      ansible.builtin.slurp:
+        src: "{{ ca_leaf_dir }}/app.csr"
+      register: ca_csr
+      become: true
+
+    - name: Sign the CSR on the management VM
+      delegate_to: "{{ ca_mgmt_host }}"
+      become: true
+      block:
+        - name: Create a work directory for this host
+          ansible.builtin.file:
+            path: "{{ ca_dir }}/work/{{ inventory_hostname }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+        - name: Stage the CSR and extensions
+          ansible.builtin.copy:
+            content: "{{ item.content }}"
+            dest: "{{ ca_dir }}/work/{{ inventory_hostname }}/{{ item.name }}"
+            owner: root
+            group: root
+            mode: "0600"
+          loop:
+            - {name: app.csr, content: "{{ ca_csr.content | b64decode }}"}
+            - name: app.ext
+              content: |
+                basicConstraints=critical,CA:FALSE
+                keyUsage=critical,digitalSignature
+                extendedKeyUsage=serverAuth
+                subjectAltName={{ ca_leaf_san }}
+          loop_control:
+            label: "{{ item.name }}"
+        - name: Sign with the CA key
+          ansible.builtin.command:
+            argv:
+              - openssl
+              - x509
+              - -req
+              - -in
+              - "{{ ca_dir }}/work/{{ inventory_hostname }}/app.csr"
+              - -CA
+              - "{{ ca_signing_crt }}"
+              - -CAkey
+              - "{{ ca_signing_key }}"
+              - -CAcreateserial
+              - -days
+              - "{{ ca_leaf_days }}"
+              - -sha256
+              - -extfile
+              - "{{ ca_dir }}/work/{{ inventory_hostname }}/app.ext"
+              - -out
+              - "{{ ca_dir }}/work/{{ inventory_hostname }}/app.crt"
+          changed_when: true
+        - name: Verify the new leaf against the signing CA
+          ansible.builtin.command: "openssl verify -CAfile {{ ca_signing_crt }} {{ ca_dir }}/work/{{ inventory_hostname }}/app.crt"
+          changed_when: false
+        - name: Read the signed certificate
+          ansible.builtin.slurp:
+            src: "{{ ca_dir }}/work/{{ inventory_hostname }}/app.crt"
+          register: ca_signed
+        - name: Remove the work directory
+          ansible.builtin.file:
+            path: "{{ ca_dir }}/work/{{ inventory_hostname }}"
+            state: absent
+
+    - name: Install the certificate
+      ansible.builtin.copy:
+        content: "{{ ca_signed.content | b64decode }}"
+        dest: "{{ ca_leaf_dir }}/app.crt"
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+
+    - name: Install the key (mode 0644 inside the 0700 directory because the relief and node_exporter containers run as different users)
+      ansible.builtin.copy:
+        src: "{{ ca_leaf_dir }}/app.key.new"
+        dest: "{{ ca_leaf_dir }}/app.key"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+
+    - name: Remove the staged key and CSR
+      ansible.builtin.file:
+        path: "{{ ca_leaf_dir }}/{{ item }}"
+        state: absent
+      loop: [app.key.new, app.csr]
+      become: true
+
+    - name: Remember that the leaf changed
+      ansible.builtin.set_fact:
+        ca_leaf_changed: true

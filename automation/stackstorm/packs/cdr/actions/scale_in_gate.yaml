@@ -1,0 +1,9 @@
+---
+name: scale_in_gate
+pack: cdr
+description: "Recheck under the lock before scale-in; proceed=false carries a noop_reason (primary_outage, metrics_stale, warm_not_ready, no_candidate, maintenance)."
+runner_type: python-script
+entry_point: scale_in_gate.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}

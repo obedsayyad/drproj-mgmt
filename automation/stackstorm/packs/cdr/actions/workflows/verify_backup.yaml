@@ -1,0 +1,73 @@
+version: 1.0
+description: >
+  SKELETON (P7). Isolated restore verification of a backup (docs/09): not implemented until P7. Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
+  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
+  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+input:
+  - operation_id
+vars:
+  - error: {}
+  - failed_step: ''
+tasks:
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+    next:
+      - when: <% succeeded() %>
+        do: isolated_restore
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  isolated_restore:
+    action: cdr.not_implemented
+    input:
+      step: isolated_restore
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: verify_contents
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: isolated_restore
+        do: fail_handler
+  verify_contents:
+    action: cdr.not_implemented
+    input:
+      step: verify_contents
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: record_result
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: verify_contents
+        do: fail_handler
+  record_result:
+    action: cdr.not_implemented
+    input:
+      step: record_result
+      phase: P7
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: record_result
+        do: fail_handler
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      error: <% ctx().error %>
+      step: <% ctx().failed_step or 'start' %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

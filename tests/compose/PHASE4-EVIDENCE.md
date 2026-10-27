@@ -1,0 +1,19 @@
+# Phase 4 evidence
+
+**Local simulation, not real infrastructure.** Every row below ran against a throwaway Postgres 17 container, StackStorm 3.9.0 (amd64, emulated on Apple silicon, Docker Desktop) and the simulation provider adapter; routing, drain and the Prometheus reload are simulated (docs/11, Phase 4, "complete on simulation"). Timings are not representative of the management VM.
+Test list with assertions: `README.md`. Raw output of each run: the `*.local.out` file named in the table. Dates are UTC from the `date:` line of each run.
+
+| Test | Script | Assertion summary | Latest pass count | Date | Output |
+| --- | --- | --- | --- | --- | --- |
+| T08 | `t08-t09-local.sh` | Provider never ready on both providers: waiting event per checkpoint, attempt cleaned with absence evidence, same-provider retry, then the other provider, then one `provision.exhausted` incident; all slots free | 70 passed, 0 failed (T08 + T09 + T09b in one run) | 2026-10-26 | `t08-t09.local.out` |
+| T09 | `t08-t09-local.sh` | Create times out with the VM existing: slot `held_uncertain` and counted, zero further creates, reconcile resolves with evidence; T09b database outage during a lease ends terminal with the lease free | (same run) | 2026-10-26 | `t08-t09.local.out` |
+| T10 | `t10-t22-local.sh` | `primary_failure` + `scale_out` + reconcile together: one lease holder per generation, one slot per operation, create count as intended, fenced worker gets `lease_lost`; timer, restart gate and orphan gate | 107 passed, 0 failed (T10 + T22 + gates in one run) | 2026-10-26 | `t10-t22.local.out` |
+| T22 | `t10-t22-local.sh` | Scale-in releases only after confirmed absence; with the primary down `cpu.low` is a no-op `primary_outage` with no slot release; queued scale-in superseded | (same run) | 2026-10-26 | `t10-t22.local.out` |
+| T27 | `t27-t36-local.sh` | Standby repair a-d plus healthy: redeploy, power-on + redeploy, release-with-evidence + reprovision, each ending ready + pinned digest + routing `backup`; (d) unknown answer: zero creates/deploys/power-ons/deletes, incident `standby.uncertain:warm` | 156 passed, 0 failed (T27 + T36 + apply_policy + skeletons in one run); two consecutive runs, both 156/0 | 2026-10-26 (runs at 18:48Z and 19:09Z) | `t27-t36.local.out` |
+| T36 | `t27-t36-local.sh` | Warm provider `api_unknown`: `interim-warm-linode` reserved, held warm and interim both counted, reservation beyond the cap refused, no create on the warm provider; after reconcile exactly one warm-role slot bound, surplus released only with absence evidence | (same run) | 2026-10-26 | `t27-t36.local.out` |
+
+Also in `t27-t36-local.sh` (same 156): apply_policy happy path, failed reload keeps the old version, cap reduction as a pending transition, HAProxy setting fails `not_implemented`; the six skeleton workflows fail `not_implemented` and touch nothing.
+
+Other checks of the same gate (no stack needed): drproj-app typecheck, unit, integration (59 tests, ops/0013 included); drproj-mgmt typecheck, unit (33), integration (13, migrations refreshed to include 0013); pack pytest 303 passed with 0 skips (postgres:17, `TEST_DATABASE_URL` and `KEEPALIVE_TEST_URL` set); `promtool.sh` (config, rules, alertmanager, and the config re-rendered with another `policy_version`).
+
+History worth knowing: the first complete `t27-t36` run failed 7 checks. Five were script bugs (a fixture deploy counted as a deploy, the lease asserted before its release task ran, a query that matched a released slot's deleted instance row, a wrong column name that made a "no lease taken" check pass vacuously) and two were real defects in `policy_rollback` (recorded the raw task result as the error; reloaded Prometheus even when nothing had been applied). Both defects are fixed and covered by a pytest; a later run failed one check because the probe took a lease before the generation was read, also fixed in the script.

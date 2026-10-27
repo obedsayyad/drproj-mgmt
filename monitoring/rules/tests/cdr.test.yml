@@ -1,0 +1,233 @@
+# promtool test rules monitoring/rules/tests/cdr.test.yml  (run from monitoring/rules; see tests/compose/promtool.sh)
+# Every rule has one "fires" and one "does not fire" case. policy_version is an external label (prometheus.yml),
+# so it is not part of these series; the config check asserts it separately.
+rule_files:
+  - ../cdr.yml
+evaluation_interval: 5s
+
+tests:
+  - name: stale serving member fires; fresh serving member and stale idle standby do not
+    interval: 5s
+    input_series:
+      # a: serving, samples stop after 20 s. b: serving, samples continue. c: warm standby (not serving), no samples.
+      - series: 'node_cpu_seconds_total{instance="a:9100",role="app",mode="idle",cpu="0"}'
+        values: '1 2 3 4 5 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _'
+      - series: 'node_cpu_seconds_total{instance="b:9100",role="app",mode="idle",cpu="0"}'
+        values: '1+1x19'
+      - series: 'cdr_member_serving{instance="a:9100",role="elastic"}'
+        values: '1+0x19'
+      - series: 'cdr_member_serving{instance="b:9100",role="primary"}'
+        values: '1+0x19'
+      - series: 'cdr_member_serving{instance="c:9100",role="warm"}'
+        values: '0+0x19'
+    alert_rule_test:
+      - eval_time: 25s     # a's newest sample is 5 s old at 25 s
+        alertname: CdrServingMemberStale
+        exp_alerts: []
+      - eval_time: 90s     # a's last sample is at 20 s, so its age is 70 s
+        alertname: CdrServingMemberStale
+        exp_alerts:
+          - exp_labels: { severity: critical, cdr_event: metrics.stale, instance: "a:9100", role: app, mode: idle, cpu: "0" }
+            exp_annotations: { summary: "Serving member a:9100 has stale CPU samples" }
+
+  - name: missing CPU series fires only for serving members
+    interval: 5s
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="b:9100",role="app",mode="idle",cpu="0"}'
+        values: '1+1x9'
+      - series: 'cdr_member_serving{instance="b:9100",role="primary"}'
+        values: '1+0x9'
+      - series: 'cdr_member_serving{instance="a:9100",role="elastic"}'
+        values: '1+0x9'
+      - series: 'cdr_member_serving{instance="c:9100",role="warm"}'
+        values: '0+0x9'
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: CdrServingMemberMissing
+        exp_alerts:
+          - exp_labels: { severity: critical, cdr_event: metrics.stale, instance: "a:9100", role: elastic }
+            exp_annotations: { summary: "Serving member a:9100 has no CPU series" }
+
+  - name: target down fires for a serving member only when up is not 1
+    interval: 5s
+    input_series:
+      - series: 'up{instance="a:9100",role="app",job="relief"}'
+        values: '0+0x9'
+      - series: 'up{instance="b:9100",role="app",job="relief"}'
+        values: '1+0x9'
+      - series: 'cdr_member_serving{instance="a:9100",role="elastic"}'
+        values: '1+0x9'
+      - series: 'cdr_member_serving{instance="b:9100",role="primary"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: CdrServingTargetDown
+        exp_alerts:
+          - exp_labels: { severity: critical, cdr_event: metrics.stale, instance: "a:9100", role: elastic }
+            exp_annotations: { summary: "Scrape target of serving member a:9100 is not up" }
+
+  - name: target down is not masked by a healthy scrape of the same instance from another job
+    interval: 5s
+    input_series:
+      - series: 'up{instance="a:9100",role="app",job="relief"}'
+        values: '0+0x9'
+      - series: 'up{instance="a:9100",role="app",job="node"}'
+        values: '1+0x9'
+      - series: 'up{instance="b:9100",role="app",job="relief"}'
+        values: '1+0x9'
+      - series: 'up{instance="b:9100",role="app",job="relief2"}'
+        values: '0+0x9'
+      - series: 'cdr_member_serving{instance="a:9100",role="elastic"}'
+        values: '1+0x9'
+      - series: 'cdr_member_serving{instance="b:9100",role="primary"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: CdrServingTargetDown
+        exp_alerts:
+          - exp_labels: { severity: critical, cdr_event: metrics.stale, instance: "a:9100", role: elastic }
+            exp_annotations: { summary: "Scrape target of serving member a:9100 is not up" }
+
+  - name: membership absent fires when the series vanishes and not while present
+    interval: 5s
+    input_series:
+      - series: 'cdr_member_serving{instance="a:9100",role="primary"}'
+        values: '1 1 1 _ _ _ _ _ _ _'
+    alert_rule_test:
+      - eval_time: 10s
+        alertname: CdrMembershipAbsent
+        exp_alerts: []
+      # lookback is 5 m, so the vanished series reads as absent only after it ages out
+      - eval_time: 6m
+        alertname: CdrMembershipAbsent
+        exp_alerts:
+          - exp_labels: { severity: critical, cdr_event: metrics.stale }
+            exp_annotations: { summary: "No cdr_member_serving series: membership is unknown" }
+
+  - name: backend certificate expiry under 14 days
+    interval: 1h
+    input_series:
+      # expiry timestamps are absolute: 10 d and 30 d after t=0
+      - series: 'probe_ssl_earliest_cert_expiry{instance="soon:8443"}'
+        values: '864000+0x3'
+      - series: 'probe_ssl_earliest_cert_expiry{instance="later:8443"}'
+        values: '2592000+0x3'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: CdrBackendCertExpiringSoon
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "soon:8443" }
+            exp_annotations: { summary: "Backend certificate for soon:8443 expires in under 14 days" }
+
+  - name: supabase size above 400 MB
+    interval: 1m
+    input_series:
+      - series: 'cdr_supabase_db_size_bytes'
+        values: '300000000 300000000 450000000 450000000'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CdrSupabaseDbSizeHigh
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CdrSupabaseDbSizeHigh
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "Supabase database is above 400 MB (Free limit 500 MB)" }
+
+  - name: keep-alive older than 12 h
+    interval: 1h
+    input_series:
+      # last success at t=0 for 13 h of samples; a gauge holding an absolute timestamp
+      - series: 'cdr_supabase_keepalive_last_success_timestamp'
+        values: '0+0x13'
+    alert_rule_test:
+      - eval_time: 11h
+        alertname: CdrSupabaseKeepaliveStale
+        exp_alerts: []
+      - eval_time: 13h
+        alertname: CdrSupabaseKeepaliveStale
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "Last successful Supabase keep-alive is older than 12 hours" }
+
+  - name: backup older than 26 h
+    interval: 1h
+    input_series:
+      - series: 'cdr_backup_latest_capture_timestamp'
+        values: '0+0x27'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: CdrBackupStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CdrBackupStale
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "Latest captured backup is older than 26 hours" }
+
+  - name: fleet CPU alerts use serving members only; high fires above 60 percent, low below 20 percent
+    interval: 5s
+    input_series:
+      # a (serving) is busy 80%: idle grows 0.2 per second. b (serving) is busy 60%: idle grows 0.4. c is an idle warm standby, not serving.
+      - series: 'node_cpu_seconds_total{instance="a:9100",role="app",mode="idle",cpu="0"}'
+        values: '0+1x40'
+      - series: 'node_cpu_seconds_total{instance="b:9100",role="app",mode="idle",cpu="0"}'
+        values: '0+2x40'
+      - series: 'node_cpu_seconds_total{instance="c:9100",role="app",mode="idle",cpu="0"}'
+        values: '0+5x40'
+      - series: 'cdr_member_serving{instance="a:9100",role="elastic"}'
+        values: '1+0x40'
+      - series: 'cdr_member_serving{instance="b:9100",role="primary"}'
+        values: '1+0x40'
+      - series: 'cdr_member_serving{instance="c:9100",role="warm"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 80s     # serving idle fraction (0.2 + 0.4) / 2 = 0.3 per second of 1 -> 70% busy; the idle standby is excluded
+        alertname: CdrCpuHigh
+        exp_alerts:
+          - exp_labels: { severity: warning, cdr_event: app.cpu.high }
+            exp_annotations: { summary: "Serving fleet CPU is above 60% for 30 s" }
+      - eval_time: 150s
+        alertname: CdrCpuLow
+        exp_alerts: []
+
+  - name: low fleet CPU fires after 120 s and not before
+    interval: 5s
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="a:9100",role="app",mode="idle",cpu="0"}'
+        values: '0+4.5x80'
+      - series: 'cdr_member_serving{instance="a:9100",role="primary"}'
+        values: '1+0x80'
+    alert_rule_test:
+      - eval_time: 100s
+        alertname: CdrCpuLow
+        exp_alerts: []
+      - eval_time: 170s
+        alertname: CdrCpuLow
+        exp_alerts:
+          - exp_labels: { severity: info, cdr_event: app.cpu.low }
+            exp_annotations: { summary: "Serving fleet CPU is below 20% for 120 s" }
+      - eval_time: 170s
+        alertname: CdrCpuHigh
+        exp_alerts: []
+
+  - name: primary unhealthy fires only for a down primary target, after 30 s
+    interval: 5s
+    input_series:
+      - series: 'up{instance="p:9100",role="app",job="relief"}'
+        values: '1 1 1 0+0x20'
+      - series: 'up{instance="e:9100",role="app",job="relief"}'
+        values: '0+0x23'
+      - series: 'cdr_member_serving{instance="p:9100",role="primary"}'
+        values: '1+0x23'
+      - series: 'cdr_member_serving{instance="e:9100",role="elastic"}'
+        values: '1+0x23'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: CdrPrimaryUnhealthy
+        exp_alerts: []
+      - eval_time: 80s
+        alertname: CdrPrimaryUnhealthy
+        exp_alerts:
+          - exp_labels: { severity: critical, cdr_event: app.primary.unhealthy, instance: "p:9100", role: primary }
+            exp_annotations: { summary: "Primary p:9100 is not answering" }

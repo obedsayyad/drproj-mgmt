@@ -1,0 +1,17 @@
+{
+  "name": "@drproj/mgmt-integration-tests",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@drproj/migrations": "file:../../../drproj-app/database/migrations",
+    "@drproj/operations": "workspace:*",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
+  }
+}

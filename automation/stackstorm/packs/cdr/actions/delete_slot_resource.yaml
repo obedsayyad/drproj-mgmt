@@ -1,0 +1,14 @@
+---
+name: delete_slot_resource
+pack: cdr
+description: "Delete the VM of one slot (tags project+slot, recorded resource id only) and prove it absent through the provider API."
+runner_type: python-script
+entry_point: delete_slot_resource.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true}
+  slot_key: {type: string, required: true}
+  resource_id: {type: string, required: true}
+  confirm_poll_seconds: {type: integer, default: 2}

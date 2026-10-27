@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  author: drproj
+  description: Deploy user, Docker CE, directories, swap and node_exporter for a fresh host
+  license: MIT
+  min_ansible_version: "2.17"
+  role_name: bootstrap
+  namespace: drproj
+  platforms:
+    - name: Debian
+      versions: [all]
+    - name: Ubuntu
+      versions: [all]
+  galaxy_tags: [bootstrap, docker]
+dependencies: []

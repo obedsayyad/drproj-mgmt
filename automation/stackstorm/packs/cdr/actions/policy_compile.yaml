@@ -1,0 +1,11 @@
+---
+name: policy_compile
+pack: cdr
+description: "Apply_policy step 2-3: re-render the Prometheus policy_version external label and reload (simulation or real per pack config policy_compile)."
+runner_type: python-script
+entry_point: policy_compile.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, default: 0}

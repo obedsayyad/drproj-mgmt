@@ -1,0 +1,18 @@
+---
+# Rotation step 3: reissue every leaf from the new CA. Run only after ca-rotate-bundle.yml is confirmed on every verifier.
+- name: Rotate CA, step 3 - reissue leaves from the new CA
+  hosts: primary:cloud_app
+  become: true
+  serial: 1
+  roles:
+    - role: ca
+      vars:
+        ca_action: rotate_reissue
+      tags: [ca_rotate, ca_rotate_reissue]
+  post_tasks:
+    - name: Restart the app stack so it loads the new leaf
+      community.docker.docker_compose_v2:
+        project_src: /etc/drproj/app
+        project_name: drproj-app
+        state: restarted
+      tags: [ca_rotate, ca_rotate_reissue]

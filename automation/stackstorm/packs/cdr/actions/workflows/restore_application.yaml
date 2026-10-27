@@ -1,0 +1,125 @@
+version: 1.0
+description: >
+  SKELETON (P7). Live app-only restore under maintenance (docs/09): not implemented until P7. Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
+  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
+  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+input:
+  - operation_id
+vars:
+  - error: {}
+  - failed_step: ''
+tasks:
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+    next:
+      - when: <% succeeded() %>
+        do: validate_verified_backup
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  validate_verified_backup:
+    action: cdr.not_implemented
+    input:
+      step: validate_verified_backup
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: maintenance_on
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: validate_verified_backup
+        do: fail_handler
+  maintenance_on:
+    action: cdr.not_implemented
+    input:
+      step: maintenance_on
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: drain_writes
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: maintenance_on
+        do: fail_handler
+  drain_writes:
+    action: cdr.not_implemented
+    input:
+      step: drain_writes
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: safety_dump
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: drain_writes
+        do: fail_handler
+  safety_dump:
+    action: cdr.not_implemented
+    input:
+      step: safety_dump
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: schema_swap
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: safety_dump
+        do: fail_handler
+  schema_swap:
+    action: cdr.not_implemented
+    input:
+      step: schema_swap
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: verify_through_api
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: schema_swap
+        do: fail_handler
+  verify_through_api:
+    action: cdr.not_implemented
+    input:
+      step: verify_through_api
+      phase: P7
+    next:
+      - when: <% succeeded() %>
+        do: maintenance_off
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: verify_through_api
+        do: fail_handler
+  maintenance_off:
+    action: cdr.not_implemented
+    input:
+      step: maintenance_off
+      phase: P7
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: maintenance_off
+        do: fail_handler
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      error: <% ctx().error %>
+      step: <% ctx().failed_step or 'start' %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

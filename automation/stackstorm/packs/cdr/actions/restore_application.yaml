@@ -1,0 +1,9 @@
+---
+name: restore_application
+pack: cdr
+description: "Live app-only restore under maintenance (docs/09): not implemented until P7. Fails with not_implemented."
+runner_type: orquesta
+entry_point: workflows/restore_application.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}

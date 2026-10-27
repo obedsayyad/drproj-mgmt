@@ -1,0 +1,13 @@
+---
+name: scale_out
+pack: cdr
+description: Add one elastic VM (lease, recheck, pick provider, reserve, provision and deploy, release).
+runner_type: orquesta
+entry_point: workflows/scale_out.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}
+  resume: {type: boolean, default: false}
+  first_attempt: {type: integer, default: 1}
+  attempts_done: {type: object, default: {}}

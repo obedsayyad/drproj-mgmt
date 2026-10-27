@@ -1,0 +1,10 @@
+---
+name: standby_window
+pack: cdr
+description: "Fresh readiness deadline and checkpoints (absolute times) from the operation's captured provisioning policy, for a redeploy of an existing standby."
+runner_type: python-script
+entry_point: standby_window.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}

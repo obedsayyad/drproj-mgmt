@@ -1,0 +1,14 @@
+---
+name: apply_routing
+pack: cdr
+description: "SIMULATED routing change (primary maint/normal, slot none/backup/active/draining); HAProxy is P6."
+runner_type: python-script
+entry_point: apply_routing.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  target: {type: string, required: true}
+  mode: {type: string, required: true}
+  slot_generation: {type: integer, default: 0}
+  weight: {type: integer}

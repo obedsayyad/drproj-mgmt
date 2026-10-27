@@ -1,0 +1,58 @@
+# LOCAL ONLY overlay for tests/compose/t31.sh; not the management VM and never deployed.
+# Adds a throwaway Postgres (profile "local"), swaps Caddy to its internal CA, and binds loopback ports.
+services:
+  # StackStorm 3.9.0 images are amd64-only; on Apple silicon they run emulated (slow, local only).
+  st2api:
+    platform: linux/amd64
+  st2auth:
+    platform: linux/amd64
+  st2stream:
+    platform: linux/amd64
+  st2web:
+    platform: linux/amd64
+  st2actionrunner:
+    platform: linux/amd64
+  st2scheduler:
+    platform: linux/amd64
+  st2workflowengine:
+    platform: linux/amd64
+  st2notifier:
+    platform: linux/amd64
+  st2garbagecollector:
+    platform: linux/amd64
+  st2rulesengine:
+    platform: linux/amd64
+  st2timersengine:
+    platform: linux/amd64
+  st2-register:
+    platform: linux/amd64
+  st2-startup-reconcile:
+    platform: linux/amd64
+  caddy:
+    ports: !override
+      - "127.0.0.1:${T31_HTTPS_PORT:-18443}:443"
+    volumes: !override
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - ./snippets.caddy:/etc/caddy/snippets.caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      OPS_HOST: ops.localhost
+
+  localpg:
+    profiles: [local]
+    image: postgres:${LOCAL_PG_TAG:-17.11-alpine}
+    mem_limit: 256m
+    networks: [internal]
+    ports: ["127.0.0.1:${T31_PG_PORT:-55433}:5432"]
+    environment:
+      POSTGRES_PASSWORD: ${LOCAL_PG_PASSWORD:?set LOCAL_PG_PASSWORD}
+    volumes: [localpg_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  localpg_data: {}

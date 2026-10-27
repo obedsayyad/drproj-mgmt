@@ -1,0 +1,107 @@
+T16/T30 LOCAL RUN - Docker Desktop on a developer Mac (arm64, docker VM 2 CPU / 8308797440 bytes), NOT the management VM
+StackStorm images run as linux/amd64 (emulated on arm64); timings and memory are NOT representative of the 2 vCPU / 4 GB VM
+date: 2026-10-25T10:20:43Z
+PASS secrets: .env is 0600 in a 0700 dir
+--- 1. Postgres, migrations (incl. ops/0008), seed policy
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+PASS ops image builds (local tag, not pushed)
+PASS localpg healthy
+      ops/0008_processed_events_source.sql
+      app/0001_app_schema.sql
+      app/0002_runtime_readiness_grant.sql
+PASS login roles created (dr_ops, dr_app_runtime)
+    {"msg":"policy version 1 seeded"}
+PASS processed_events has source+event_name columns (2)
+--- 2. StackStorm stores and services (emulated amd64: slow)
+PASS mongo, rabbitmq, redis healthy
+PASS st2api healthy (runner types registered)
+PASS st2 services healthy
+PASS st2-register --register-all (pack cdr, rules, config)
+--- 3. st2 authentication rejects unauthenticated requests
+PASS GET /v1/actions without credentials (401)
+PASS POST /v1/webhooks/cdr_alert without St2-Api-Key (401)
+PASS POST /v1/webhooks/cdr_alert with a wrong St2-Api-Key (401)
+PASS st2auth with a wrong password (401)
+PASS st2auth with the st2admin password (201)
+PASS st2 token obtained (not printed)
+PASS GET /v1/actions with a token (200)
+PASS pack cdr registered
+PASS action cdr.keepalive registered
+PASS action cdr.record_alert registered
+PASS rule cdr.cdr_alert registered
+    observed: packs.setup_virtualenv did not complete (runner restarts so far: 1)
+PASS st2actionrunner healthy after the virtualenv step
+PASS pack virtualenv has psycopg (pip install -r requirements.txt)
+PASS St2-Api-Key created and written to the secret file (not printed)
+--- 4. T30: keep-alive action run manually
+PASS st2 run cdr.keepalive succeeded
+PASS ops.keepalive_runs gained a succeeded row (1)
+    latest row: t|stackstorm|-|10:23:30Z
+--- 5. monitoring stack up (prometheus, alertmanager, grafana, ops, caddy)
+PASS monitoring and ops healthy
+--- 6. T16/T30: alert delivery to st2 records ops.processed_events
+PASS amtool alert add CdrSmokeTest
+PASS processed_events row for CdrSmokeTest (source=alertmanager) (1)
+    row: 1|alertmanager|CdrSmokeTest|t
+    st2 executions of cdr.record_alert: 2 succeeded in the last 3
+    observed (not asserted): CdrMembershipAbsent reached st2 on its own with an empty inventory: 1 row(s); active alerts now: CdrMembershipAbsent CdrSmokeTest 
+PASS cdr.record_alert execution succeeded
+    alertmanager webhook counters: alertmanager_notifications_failed_total{integration="webhook",reason="authError"} 0 alertmanager_notifications_failed_total{integration="webhook",reason="clientError"} 0 alertmanager_notifications_failed_total{integration="webhook",reason="contextCanceled"} 0 alertmanager_notifications_failed_total{integration="webhook",reason="contextDeadlineExceeded"} 0 alertmanager_notifications_failed_total{integration="webhook",reason="other"} 0 alertmanager_notifications_failed_total{integration="webhook",reason="rateLimited"} 0 alertmanager_notifications_failed_total{integration="webhook",reason="serverError"} 0 alertmanager_notifications_total{integration="webhook"} 2 
+--- 7. /api/overview Prometheus probe against the live stack
+    integrations (prometheus stackstorm haproxy-detail): fresh fresh not probed in this phase
+PASS prometheus fresh, stackstorm fresh, haproxy not probed
+    prometheus targets: alertmanager=up ops=up prometheus=up
+    after stopping alertmanager for 40 s: stale - job alertmanager target is down
+PASS a down expected target turns the Prometheus integration stale
+--- 7b. database outage: ops stays live, reports not-ready, does not restart, recovers
+PASS localpg stopped
+PASS /health/live during the outage (200)
+PASS /health/ready during the outage (503)
+PASS /health/ready body carries DEPENDENCY_UNAVAILABLE
+PASS ops RestartCount unchanged after the outage (0)
+PASS /health/live still 200 after 35 s (200)
+PASS localpg restarted healthy
+PASS /health/ready after the database returns (200)
+PASS ops RestartCount unchanged after recovery (0)
+--- 8. Grafana provisioning
+    dashboards: CDR Fleet,CDR Management VM,CDR Relief HTTP,CDR Supabase
+PASS provisioned dashboards (CDR Fleet,CDR Management VM,CDR Relief HTTP,CDR Supabase)
+PASS grafana anonymous access is off (401)
+PASS datasource proxy returns the ops target (1)
+--- 9. T18 PREVIEW (local Docker Desktop, NOT the management VM): stack memory under one pg_restore of the seed dump
+    {"msg":"seed complete","inserted":12,"total":12}
+PASS seed data present in the app schema (12 relief_requests)
+PASS pg_dump -Fc -n app (10696 bytes)
+PASS restore-test-pg healthy
+PASS pg_restore of the seed dump
+PASS restored row count equals source (12)
+    container               idle peak  restore peak     limit   (MiB)
+    alertmanager                 14.2          14.3        64
+    blackbox                      3.3           3.3        48
+    caddy                        12.1          12.1        64
+    grafana                     251.7         252.1       256
+    mongo                        99.7         100.0       320
+    ops                          48.4          48.4       160
+    prometheus                   38.1          38.2       256
+    rabbitmq                    112.4         112.4       256
+    redis                         3.6           3.6        64
+    restore-test-pg               0.0          22.9       512
+    st2actionrunner             137.8         137.9       512
+    st2api                      143.0         143.0       192
+    st2auth                     151.2         151.2       192
+    st2garbagecollector         111.1         111.1       160
+    st2notifier                 127.0         127.0       160
+    st2rulesengine              114.4         114.4       160
+    st2scheduler                130.7         130.8       160
+    st2stream                   132.5         132.5       160
+    st2timersengine             127.2         127.2       160
+    st2workflowengine           130.1         130.1       160
+    SUM of per-container peaks     1888.5        1912.5      4016
+    note: sum of peaks over-states simultaneous use; mem_limit values are the ceilings in compose.yaml; the seed dump is tiny, so this is a preview of the harness, not the T18 result.
+--- summary
+passed=48 failed=0
+images: caddy:2.11.7 drproj-operations:local grafana/grafana:13.2.4 mongo:7.0.45 postgres:17.11-alpine prom/alertmanager:v0.34.1 prom/blackbox-exporter:v0.29.1 prom/prometheus:v3.15.1 rabbitmq:4.3.7 redis:7.4.11-alpine stackstorm/st2actionrunner:3.9.0 stackstorm/st2api:3.9.0 stackstorm/st2auth:3.9.0 stackstorm/st2garbagecollector:3.9.0 stackstorm/st2notifier:3.9.0 stackstorm/st2rulesengine:3.9.0 stackstorm/st2scheduler:3.9.0 stackstorm/st2stream:3.9.0 stackstorm/st2timersengine:3.9.0 stackstorm/st2workflowengine:3.9.0 
+--- cleanup

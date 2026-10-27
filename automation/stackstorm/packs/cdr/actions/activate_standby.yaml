@@ -1,0 +1,10 @@
+---
+name: activate_standby
+pack: cdr
+description: "Activate the idle warm standby (simulated routing) before creating another VM."
+runner_type: orquesta
+entry_point: workflows/activate_standby.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}

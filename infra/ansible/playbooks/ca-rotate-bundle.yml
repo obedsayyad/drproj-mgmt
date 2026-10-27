@@ -1,0 +1,10 @@
+---
+# Rotation steps 1-2 (docs/08): new CA + bundle of old and new, deployed to every verifier. Leaves are untouched.
+- name: Rotate CA, step 1-2 - new CA and old+new bundle
+  hosts: management:lb
+  become: true
+  roles:
+    - role: ca
+      vars:
+        ca_action: rotate_bundle
+      tags: [ca_rotate, ca_rotate_bundle]

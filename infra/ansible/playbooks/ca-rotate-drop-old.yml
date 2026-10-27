@@ -1,0 +1,20 @@
+---
+# Rotation step 4: only after all leaves and probes are healthy on the new CA. Needs -e ca_confirm_drop_old=true.
+# Play 1 checks every application host's leaf; play 2 changes the management VM and verifiers, so nothing is dropped if a check fails.
+- name: Rotate CA, step 4a - check every leaf against the new CA
+  hosts: primary:cloud_app
+  become: true
+  roles:
+    - role: ca
+      vars:
+        ca_action: rotate_drop_old
+      tags: [ca_rotate, ca_rotate_drop_old]
+
+- name: Rotate CA, step 4b - promote the new CA and drop the old one
+  hosts: management:lb
+  become: true
+  roles:
+    - role: ca
+      vars:
+        ca_action: rotate_drop_old
+      tags: [ca_rotate, ca_rotate_drop_old]

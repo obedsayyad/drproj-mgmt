@@ -1,0 +1,10 @@
+---
+name: apply_policy
+pack: cdr
+description: "Activate a pending policy version: validate, re-render the Prometheus policy_version label, reload, verify, activate; failure keeps the old version active."
+runner_type: orquesta
+entry_point: workflows/apply_policy.yaml
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}

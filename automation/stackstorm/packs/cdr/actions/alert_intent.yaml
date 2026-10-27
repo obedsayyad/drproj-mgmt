@@ -1,0 +1,9 @@
+---
+name: alert_intent
+pack: cdr
+description: "Alertmanager notification -> recorded alert -> capacity intent (open_operation + dispatch)."
+runner_type: python-script
+entry_point: alert_intent.py
+enabled: true
+parameters:
+  body: {type: object, required: true}

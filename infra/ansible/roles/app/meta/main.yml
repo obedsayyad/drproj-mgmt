@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  author: drproj
+  description: Relief app compose stack deployed by image digest with readiness and identity checks
+  license: MIT
+  min_ansible_version: "2.17"
+  role_name: app
+  namespace: drproj
+  platforms:
+    - name: Debian
+      versions: [all]
+    - name: Ubuntu
+      versions: [all]
+  galaxy_tags: [docker, compose]
+dependencies: []

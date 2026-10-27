@@ -1,0 +1,16 @@
+---
+name: set_instance_state
+pack: cdr
+description: Record lifecycle/power/digest of a bound instance.
+runner_type: python-script
+entry_point: set_instance_state.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  slot_key: {type: string, required: true}
+  slot_generation: {type: integer, required: true}
+  lifecycle: {type: string, required: true, enum: [provisioning, deploying, ready, failed]}
+  power_state: {type: string, enum: ["on", "off", "unknown"]}
+  image_digest: {type: string}

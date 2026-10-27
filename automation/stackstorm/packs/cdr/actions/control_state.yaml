@@ -1,0 +1,11 @@
+---
+name: control_state
+pack: cdr
+description: "Remember (down) or settle (recover) a lease-store outage in the StackStorm datastore and the ops records."
+runner_type: python-script
+entry_point: control_state.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  mode: {type: string, required: true, enum: [down, recover]}
+  operation_id: {type: string}

@@ -1,0 +1,11 @@
+---
+name: standby_unhealthy
+pack: cdr
+description: "SIMULATION producer of standby.unhealthy: optionally breaks the warm standby in the simulation, opens a standby_repair operation and dispatches it. The real producer (HAProxy health) is P6."
+runner_type: python-script
+entry_point: standby_unhealthy.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  sim_fault: {type: string, default: none, enum: [none, app_broken, powered_off, absent]}
+  app_key: {type: string, default: relief}

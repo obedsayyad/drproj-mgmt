@@ -1,0 +1,8 @@
+---
+name: adapter_info
+pack: cdr
+description: Report the configured provider adapter (simulation or real); fails when provider_adapter is not set.
+runner_type: python-script
+entry_point: adapter_info.py
+enabled: true
+parameters: {}

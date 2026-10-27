@@ -1,0 +1,203 @@
+version: 1.0
+description: >
+  Apply a pending policy version (docs/03 activation, P4 scope): validate, then re-render the Prometheus policy_version external label and reload
+  (simulation or real per the pack setting policy_compile), verify what Prometheus loaded, activate. A change to a setting whose compile step is a
+  later phase (HAProxy, k6, Prometheus rule thresholds, StackStorm timers) is refused with not_implemented; any failure restores the previous label
+  and marks the version failed while the old version stays active. The capacity lease is taken only when capacity limits change.
+input:
+  - operation_id
+  - app_key: relief
+vars:
+  - generation: 0
+  - simulated: true
+  - adapter_mode: ''
+  - error: {}
+  - pending_transition: []
+  - version: 0
+tasks:
+  adapter:
+    action: cdr.adapter_info
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - simulated: <% result().result.simulated %>
+          - adapter_mode: <% result().result.adapter_mode %>
+        do: start
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+      adapter_mode: <% ctx().adapter_mode %>
+    next:
+      - when: <% succeeded() %>
+        do: requested
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  requested:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: policy.apply.requested
+      step: validate
+      message: pending policy version received
+    next:
+      - when: <% succeeded() %>
+        do: validate
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  validate:
+    action: cdr.policy_validate
+    input:
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() and not result().result.ok %>
+        publish:
+          - error: {code: policy_invalid, detail: <% result().result.errors %>}
+        do: rollback
+      - when: <% succeeded() and result().result.ok and result().result.has_unimplemented %>
+        publish:
+          - error: {code: not_implemented, detail: <% result().result.unimplemented %>}
+        do: rollback
+      - when: <% succeeded() and result().result.ok and not result().result.has_unimplemented and result().result.capacity_changed %>
+        publish:
+          - version: <% result().result.version %>
+        do: acquire
+      - when: <% succeeded() and result().result.ok and not result().result.has_unimplemented and not result().result.capacity_changed %>
+        publish:
+          - version: <% result().result.version %>
+        do: compile
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: rollback
+  acquire:
+    action: cdr.wait_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+        do: compile
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - error: {code: lease_unavailable, detail: <% result().result.reason %>}
+        do: rollback
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: rollback
+  compile:
+    action: cdr.policy_compile
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+    next:
+      - when: <% succeeded() %>
+        do: step_applied
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: rollback
+  step_applied:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: apply
+      status: verifying
+      message: Prometheus policy_version label re-rendered and reloaded; HAProxy, k6 and StackStorm timer compile are not part of this phase and no changed setting needed them
+    next:
+      - when: <% succeeded() %>
+        do: verify
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: rollback
+  verify:
+    action: cdr.policy_verify
+    input:
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: activate
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: rollback
+  activate:
+    action: cdr.policy_activate
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - pending_transition: <% result().result.pending_transition %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: rollback
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome:
+        policy_version: <% ctx().version %>
+        pending_transition: <% ctx().pending_transition %>
+        compile_steps: {prometheus_label: applied, prometheus_rules: unchanged, haproxy: unchanged, k6: unchanged, stackstorm_timers: unchanged}
+        adapter: <% ctx().adapter_mode %>
+        simulated: <% ctx().simulated %>
+    next:
+      - when: <% succeeded() and ctx().generation > 0 %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
+  rollback:
+    action: cdr.policy_rollback
+    input:
+      operation_id: <% ctx().operation_id %>
+      error: <% str(ctx().error) %>
+    next:
+      - when: <% succeeded() or failed() %>
+        do: fail_handler
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: <% ctx().error %>
+      step: apply_policy
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

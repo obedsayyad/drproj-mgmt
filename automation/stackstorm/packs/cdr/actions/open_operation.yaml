@@ -1,0 +1,13 @@
+---
+name: open_operation
+pack: cdr
+description: Open or return the operation for an automation intent (idempotent on fingerprint; captures the active policy version).
+runner_type: python-script
+entry_point: open_operation.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  kind: {type: string, required: true, enum: [scale_out, scale_in, primary_failure, standby_repair, reconcile, activate_standby]}
+  source: {type: string, required: true, enum: [automation, alertmanager, timer, reconciliation]}
+  fingerprint: {type: string, required: true}
+  event_name: {type: string}

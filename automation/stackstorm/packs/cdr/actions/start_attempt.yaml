@@ -1,0 +1,15 @@
+---
+name: start_attempt
+pack: cdr
+description: Record a provisioning attempt (deadline and all checkpoints from the captured policy) before the create call.
+runner_type: python-script
+entry_point: start_attempt.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  attempt: {type: integer, required: true}
+  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  slot_key: {type: string, required: true}
+  slot_generation: {type: integer, required: true}

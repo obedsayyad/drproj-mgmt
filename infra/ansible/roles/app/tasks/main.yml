@@ -1,0 +1,156 @@
+---
+# Deploy the relief app stack to one application host (primary or a cloud VM) by IMAGE DIGEST, then prove it: health, identity, digest.
+# The same pinned digest runs everywhere (docs/11 Phase 5). A ':local' reference is for local and simulated runs only.
+- name: Check what is being deployed
+  ansible.builtin.assert:
+    that:
+      - app_instance_id is match('^[A-Za-z0-9._-]{1,64}$')
+      - (app_digest | length > 0 and app_digest is match('^sha256:[0-9a-f]{64}$')) or (app_digest | length == 0 and app_allow_local_tag | bool)
+      - not (app_allow_local_tag | bool and 'cloud_app' in group_names)
+    fail_msg: >-
+      refusing to deploy: registry.application_image_digest must be a sha256 digest (a :local image needs allow_local_tag=true, which is never
+      allowed on a provider VM), and the instance id must match [A-Za-z0-9._-]{1,64}
+    quiet: true
+  tags: [app, always]
+
+- name: Read the database URL from the controller environment
+  ansible.builtin.set_fact:
+    app_supabase_url: "{{ lookup('ansible.builtin.env', app_supabase_env) }}"
+  no_log: true
+  tags: [app, config]
+
+- name: Refuse to deploy without a database URL
+  ansible.builtin.assert:
+    that: app_supabase_url | length > 0
+    fail_msg: "{{ app_supabase_env }} is not set in the controller environment (.env on the management VM)"
+    quiet: true
+  tags: [app, config]
+
+- name: Create the stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop: ["{{ app_dir }}", "{{ app_dir }}/certs"]
+  become: true
+  tags: [app, config]
+
+- name: Render the Compose file
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ app_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [app, config]
+
+- name: Render the environment file (mode 0600)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+  tags: [app, config]
+
+- name: Log in to the registry when a pull credential is supplied
+  community.docker.docker_login:
+    registry_url: "{{ app_registry_host }}"
+    username: "{{ inputs.github.owner }}"
+    password: "{{ lookup('ansible.builtin.env', app_ghcr_env) }}"
+  become: true
+  no_log: true
+  when: app_ghcr_env | length > 0 and (lookup('ansible.builtin.env', app_ghcr_env) | length > 0)
+  tags: [app, deploy]
+
+- name: Start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}"
+    project_name: drproj-app
+    state: present
+    pull: missing
+    recreate: "{{ 'always' if (ca_leaf_changed | default(false) | bool) else 'auto' }}"
+    wait: true
+    wait_timeout: 120
+  become: true
+  register: app_compose
+  tags: [app, deploy]
+
+# ---- verification (from the controller, with the project CA bundle; certificate and hostname checks stay on)
+- name: Wait for liveness
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host | default(inventory_hostname) }}:{{ inputs.ports.app_https }}/health/live"
+    ca_path: "{{ lookup('ansible.builtin.env', app_ca_bundle_env) }}"
+    return_content: true
+    status_code: 200
+    timeout: 5
+  delegate_to: localhost
+  become: false
+  register: app_live
+  retries: "{{ app_ready_retries }}"
+  delay: "{{ app_ready_delay }}"
+  until: app_live.status | default(0) == 200
+  tags: [app, verify]
+
+- name: Wait for readiness
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host | default(inventory_hostname) }}:{{ inputs.ports.app_https }}/health/ready"
+    ca_path: "{{ lookup('ansible.builtin.env', app_ca_bundle_env) }}"
+    return_content: true
+    status_code: 200
+    timeout: 5
+  delegate_to: localhost
+  become: false
+  register: app_ready
+  retries: "{{ app_ready_retries }}"
+  delay: "{{ app_ready_delay }}"
+  until: app_ready.status | default(0) == 200
+  tags: [app, verify]
+
+- name: Check the instance identity header
+  ansible.builtin.assert:
+    that:
+      - app_live.x_instance_id | default('') == app_instance_id
+      - app_ready.x_instance_id | default('') == app_instance_id
+    fail_msg: "X-Instance-Id does not match {{ app_instance_id }}: the wrong host or a stale container answered"
+    quiet: true
+  tags: [app, verify]
+
+- name: Inspect the running container
+  community.docker.docker_container_info:
+    name: "{{ app_container }}"
+  become: true
+  register: app_container_info
+  tags: [app, verify]
+
+- name: Inspect the image
+  community.docker.docker_image_info:
+    name: "{{ app_image }}"
+  become: true
+  register: app_image_info
+  tags: [app, verify]
+
+- name: Compare the running image with the pinned digest
+  ansible.builtin.assert:
+    that:
+      - app_container_info.exists
+      - app_image_info.images | length == 1
+      - app_container_info.container.Image == app_image_info.images[0].Id
+      - app_digest | length == 0 or (app_image_info.images[0].RepoDigests | select('match', '.*@' ~ app_digest ~ '$') | list | length) > 0
+    fail_msg: "the running container does not use {{ app_image }}"
+    quiet: true
+  tags: [app, verify]
+
+- name: Report readiness facts to the caller
+  ansible.builtin.set_stats:
+    data:
+      ready: true
+      instance_id: "{{ app_instance_id }}"
+      digest: "{{ app_digest if app_digest | length > 0 else app_image_info.images[0].Id }}"
+    per_host: true
+  tags: [app, verify]

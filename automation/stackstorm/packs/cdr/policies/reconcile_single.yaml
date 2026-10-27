@@ -1,0 +1,13 @@
+---
+# Overlapping reconcile ticks are cancelled, not queued (a 60 s timer must not pile up behind a long run). Keyed on
+# app_key like the other capacity guards; cancel (not delay) is why reconcile has no separate delay guard.
+name: reconcile_single
+description: At most one running cdr.reconcile per app_key; an overlapping start is cancelled.
+enabled: true
+resource_ref: cdr.reconcile
+policy_type: action.concurrency.attr
+parameters:
+  action: cancel
+  threshold: 1
+  attributes:
+    - app_key

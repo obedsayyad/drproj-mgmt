@@ -1,0 +1,13 @@
+---
+name: renew_lease
+pack: cdr
+description: Extend the lease while this operation still holds it at this fencing generation; lease_lost otherwise.
+runner_type: python-script
+entry_point: renew_lease.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}
+  generation: {type: integer, required: true}
+  app_key: {type: string, default: relief}
+  ttl_seconds: {type: integer, default: 120}

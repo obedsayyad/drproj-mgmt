@@ -1,0 +1,746 @@
+version: 1.0
+description: >
+  Warm standby repair (docs/04), SIMULATED routing and provider answers. Lease (waits), recheck (maintenance), routing of the standby to maintenance
+  (slot routing none), then classify from the slot table, the provider API (get + tag listing) and readiness: healthy (record only), app broken
+  (redeploy), powered off (power on, redeploy), confirmed absent (release with absence evidence, reserve the warm slot, provision into it), or unknown
+  (hold the slot, incident standby.uncertain, never create on the warm provider). A held_uncertain warm slot gets an interim warm standby on the OTHER
+  provider (its own slot interim-warm-<provider>, counted against that provider's cap) while that provider answers. A redeploy that misses the
+  readiness deadline is tried once more. Done only when ready, the digest matches and routing shows the server UP as backup; then standby.repaired.
+input:
+  - operation_id
+  - app_key: relief
+vars:
+  - generation: 0
+  - simulated: true
+  - adapter_mode: ''
+  - noop_reason: ''
+  - error: {}
+  - klass: ''
+  - path: ''
+  - provider: ''
+  - slot_key: ''
+  - slot_generation: 0
+  - slot_state: ''
+  - resource_id: ''
+  - other_provider: ''
+  - interim_bound: false
+  - evidence: {}
+  - uncertain_reason: ''
+  - deadline_at: ''
+  - checkpoints_at: []
+  - image_digest: ''
+  - redeploys: 0
+output:
+  - path: <% ctx().path %>
+tasks:
+  adapter:
+    action: cdr.adapter_info
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - simulated: <% result().result.simulated %>
+          - adapter_mode: <% result().result.adapter_mode %>
+        do: start
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: start
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+      adapter_mode: <% ctx().adapter_mode %>
+    next:
+      - when: <% succeeded() %>
+        do: acquire
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  acquire:
+    action: cdr.wait_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+        do: step_lease
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - noop_reason: <% 'lease_' + result().result.reason %>
+        do: noop_no_lease
+      - when: <% failed() %>
+        publish:
+          - noop_reason: lease_unavailable
+        do: noop_no_lease
+
+  step_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: lease_acquired
+      status: running
+      message: <% 'capacity lease held at generation ' + str(ctx().generation) %>
+    next:
+      - when: <% succeeded() %>
+        do: classify
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  classify:
+    action: cdr.standby_classify
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - klass: <% result().result.class %>
+          - provider: <% result().result.provider %>
+          - slot_key: <% result().result.slot_key %>
+          - slot_generation: <% result().result.slot_generation %>
+          - slot_state: <% result().result.slot_state %>
+          - resource_id: <% result().result.resource_id %>
+          - other_provider: <% result().result.other_provider %>
+          - interim_bound: <% result().result.interim_bound %>
+          - evidence: <% result().result.get('evidence', {}) %>
+          - image_digest: <% result().result.get('image_digest', '') %>
+          - uncertain_reason: <% result().result.get('reason', '') %>
+        do: step_classified
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  step_classified:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: classified
+      message: <% 'warm standby classified as ' + ctx().klass %>
+    next:
+      - when: <% succeeded() %>
+        do: decide
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  decide:
+    action: core.noop
+    next:
+      - when: <% succeeded() and ctx().klass = 'maintenance' %>
+        publish:
+          - noop_reason: maintenance
+        do: noop_release
+      - when: <% succeeded() and ctx().klass = 'busy' %>
+        publish:
+          - noop_reason: warm_slot_busy
+        do: noop_release
+      - when: <% succeeded() and ctx().klass = 'held_uncertain' and ctx().interim_bound %>
+        publish:
+          - noop_reason: interim_warm_active
+        do: noop_release
+      - when: <% succeeded() and ctx().klass != 'maintenance' and ctx().klass != 'busy' and not (ctx().klass = 'held_uncertain' and ctx().interim_bound) %>
+        do: route_maint
+
+  route_maint:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: warm
+      mode: none
+    next:
+      - when: <% succeeded() %>
+        do: decide_path
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  decide_path:
+    action: core.noop
+    next:
+      - when: <% succeeded() and ctx().klass = 'healthy' %>
+        publish:
+          - path: healthy
+        do: set_ready_healthy
+      - when: <% succeeded() and ctx().klass = 'app_broken' %>
+        publish:
+          - path: redeploy
+        do: window
+      - when: <% succeeded() and ctx().klass = 'powered_off' %>
+        publish:
+          - path: power_on_redeploy
+        do: power_on
+      - when: <% succeeded() and ctx().klass = 'absent' and ctx().slot_state = 'bound' %>
+        publish:
+          - path: reprovision
+        do: begin_release
+      - when: <% succeeded() and ctx().klass = 'absent' and ctx().slot_state != 'bound' %>
+        publish:
+          - path: reprovision
+        do: reserve_warm
+      - when: <% succeeded() and ctx().klass = 'held_uncertain' %>
+        publish:
+          - path: interim
+        do: interim_gate
+      - when: <% succeeded() and ctx().klass = 'unknown' and ctx().slot_state = 'bound' %>
+        publish:
+          - path: hold_and_interim
+        do: hold_uncertain
+      - when: <% succeeded() and ctx().klass = 'unknown' and ctx().slot_state != 'bound' %>
+        publish:
+          - path: hold_and_interim
+        do: raise_uncertain
+
+  set_ready_healthy:
+    action: cdr.set_instance_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      lifecycle: ready
+      power_state: 'on'
+      image_digest: <% ctx().image_digest %>
+    next:
+      - when: <% succeeded() %>
+        do: route_backup
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  power_on:
+    action: cdr.provider_power_on
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      resource_id: <% ctx().resource_id %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ok' %>
+        do: window
+      - when: <% succeeded() and result().result.result != 'ok' %>
+        publish:
+          - uncertain_reason: <% 'power_on_' + result().result.result %>
+        do: hold_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  window:
+    action: cdr.standby_window
+    input:
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - deadline_at: <% result().result.deadline_at %>
+          - checkpoints_at: <% result().result.checkpoints_at %>
+        do: set_deploying
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  set_deploying:
+    action: cdr.set_instance_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      lifecycle: deploying
+      power_state: 'on'
+    next:
+      - when: <% succeeded() %>
+        do: deploy
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  deploy:
+    action: cdr.run_heavy
+    input:
+      task: deploy
+      resource_class: heavy
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      resource_id: <% ctx().resource_id %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ok' %>
+        do: wait_ready
+      - when: <% succeeded() and result().result.result != 'ok' %>
+        do: redeploy_missed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  wait_ready:
+    action: cdr.wait_ready
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      resource_id: <% ctx().resource_id %>
+      deadline_at: <% ctx().deadline_at %>
+      checkpoints_at: <% ctx().checkpoints_at %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ready' %>
+        publish:
+          - image_digest: <% result().result.image_digest %>
+        do: set_ready
+      - when: <% succeeded() and result().result.result = 'deadline' %>
+        do: redeploy_missed
+      - when: <% succeeded() and result().result.result = 'unknown' %>
+        publish:
+          - uncertain_reason: readiness_unknown
+        do: hold_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  redeploy_missed:
+    action: core.noop
+    next:
+      - when: <% succeeded() and ctx().redeploys < 1 %>
+        publish:
+          - redeploys: <% ctx().redeploys + 1 %>
+        do: window
+      - when: <% succeeded() and ctx().redeploys >= 1 %>
+        do: raise_repair_failed
+
+  set_ready:
+    action: cdr.set_instance_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      lifecycle: ready
+      power_state: 'on'
+      image_digest: <% ctx().image_digest %>
+    next:
+      - when: <% succeeded() %>
+        do: route_backup
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  begin_release:
+    action: cdr.begin_slot_release
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: release_slot
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  release_slot:
+    action: cdr.release_slot
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      evidence: <% ctx().evidence %>
+    next:
+      - when: <% succeeded() %>
+        do: reserve_warm
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  reserve_warm:
+    action: cdr.reserve_slot
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      kind: warm
+      simulated: <% ctx().simulated %>
+    next:
+      - when: <% succeeded() and result().result.reserved %>
+        publish:
+          - slot_key: <% result().result.slot_key %>
+          - slot_generation: <% result().result.slot_generation %>
+        do: provision_warm
+      - when: <% succeeded() and not result().result.reserved %>
+        publish:
+          - noop_reason: no_capacity
+        do: fail_held
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  provision_warm:
+    action: cdr.provision_and_deploy
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      slot_kind: warm
+    next:
+      - when: <% succeeded() and result().output.result = 'ready' %>
+        publish:
+          - provider: <% result().output.provider %>
+          - slot_key: <% result().output.slot_key %>
+          - slot_generation: <% result().output.slot_generation %>
+          - resource_id: <% result().output.resource_id %>
+        do: route_backup
+      - when: <% succeeded() and result().output.result = 'exhausted' %>
+        do: raise_repair_failed
+      - when: <% succeeded() and result().output.result = 'uncertain' %>
+        publish:
+          - provider: <% result().output.provider %>
+          - slot_key: <% result().output.slot_key %>
+          - uncertain_reason: provision_uncertain
+        do: raise_uncertain_only
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  hold_uncertain:
+    action: cdr.mark_slot_uncertain
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      reason: <% ctx().uncertain_reason or 'provider_answer_unknown' %>
+    next:
+      - when: <% succeeded() %>
+        do: raise_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  raise_uncertain:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'standby.uncertain:' + ctx().slot_key %>
+      severity: critical
+      source: automation
+      description: <% 'the warm standby in ' + ctx().slot_key + ' cannot be classified (' + ctx().uncertain_reason + '); the slot is held and counted until reconcile resolves it. No VM is created on its provider' %>
+      resources: <% [ctx().slot_key] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: interim_gate
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  raise_uncertain_only:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'provision.uncertain:' + ctx().slot_key %>
+      severity: critical
+      source: automation
+      description: <% 'existence of the VM in ' + ctx().slot_key + ' is unknown; the slot is held and counted until reconcile resolves it' %>
+      resources: <% [ctx().slot_key] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: fail_held
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  interim_gate:
+    action: cdr.standby_classify
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+    next:
+      - when: <% succeeded() and result().result.interim_bound %>
+        publish:
+          - noop_reason: interim_warm_active
+        do: noop_release
+      - when: <% succeeded() and not result().result.interim_bound and result().result.other_available and result().result.slot_state = 'held_uncertain' %>
+        publish:
+          - other_provider: <% result().result.other_provider %>
+        do: reserve_interim
+      - when: <% succeeded() and not (not result().result.interim_bound and result().result.other_available and result().result.slot_state = 'held_uncertain') %>
+        do: fail_held
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  reserve_interim:
+    action: cdr.reserve_slot
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().other_provider %>
+      kind: interim_warm
+      simulated: <% ctx().simulated %>
+    next:
+      - when: <% succeeded() and result().result.reserved %>
+        publish:
+          - provider: <% ctx().other_provider %>
+          - slot_key: <% result().result.slot_key %>
+          - slot_generation: <% result().result.slot_generation %>
+          - path: interim
+        do: step_interim
+      - when: <% succeeded() and not result().result.reserved %>
+        publish:
+          - noop_reason: no_capacity
+        do: fail_held
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  step_interim:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: interim_reserved
+      message: <% 'interim warm standby reserved - ' + ctx().slot_key + ' on ' + ctx().provider %>
+    next:
+      - when: <% succeeded() %>
+        do: provision_interim
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  provision_interim:
+    action: cdr.provision_and_deploy
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      provider: <% ctx().provider %>
+      slot_key: <% ctx().slot_key %>
+      slot_generation: <% ctx().slot_generation %>
+      slot_kind: interim_warm
+    next:
+      - when: <% succeeded() and result().output.result = 'ready' %>
+        publish:
+          - provider: <% result().output.provider %>
+          - slot_key: <% result().output.slot_key %>
+          - slot_generation: <% result().output.slot_generation %>
+          - resource_id: <% result().output.resource_id %>
+        do: route_backup
+      - when: <% succeeded() and result().output.result = 'exhausted' %>
+        do: raise_repair_failed
+      - when: <% succeeded() and result().output.result = 'uncertain' %>
+        publish:
+          - provider: <% result().output.provider %>
+          - slot_key: <% result().output.slot_key %>
+        do: raise_uncertain_only
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  route_backup:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: warm
+      mode: backup
+    next:
+      - when: <% succeeded() and result().result.applied %>
+        do: verify
+      - when: <% succeeded() and not result().result.applied %>
+        do: raise_repair_failed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  verify:
+    action: cdr.standby_verify
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      slot_key: <% ctx().slot_key %>
+      provider: <% ctx().provider %>
+      resource_id: <% ctx().resource_id %>
+    next:
+      - when: <% succeeded() and result().result.verified %>
+        do: emit_repaired
+      - when: <% succeeded() and not result().result.verified %>
+        do: raise_repair_failed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  emit_repaired:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: standby.repaired
+      step: repaired
+      status: verifying
+      message: <% 'warm standby ' + ctx().slot_key + ' repaired (' + ctx().path + ')' %>
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: {'path': '<% ctx().path %>', 'provider': '<% ctx().provider %>', 'slot_key': '<% ctx().slot_key %>', 'resource_id': '<% ctx().resource_id %>', 'adapter': '<% ctx().adapter_mode %>', 'simulated_routing': '<% ctx().simulated %>'}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  raise_repair_failed:
+    action: cdr.open_incident
+    input:
+      fingerprint: <% 'standby.repair_failed:' + ctx().slot_key %>
+      severity: critical
+      source: automation
+      description: <% 'repair of the warm standby ' + ctx().slot_key + ' did not reach ready, digest and backup routing; the slot is not released' %>
+      resources: <% [ctx().slot_key] %>
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: fail_repair
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  fail_repair:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.failed
+      step: repair_failed
+      status: failed
+      message: warm standby repair failed after the allowed retry
+      outcome: {'error': 'repair_failed', 'path': '<% ctx().path %>', 'slot_key': '<% ctx().slot_key %>'}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  fail_held:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.failed
+      step: held_uncertain
+      status: failed
+      message: <% 'warm standby not repaired - slot held (' + (ctx().noop_reason or ctx().uncertain_reason) + '); reconcile resolves it' %>
+      outcome: {'error': 'held_uncertain', 'path': '<% ctx().path %>', 'slot_key': '<% ctx().slot_key %>', 'reason': '<% ctx().noop_reason or ctx().uncertain_reason %>'}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  noop_release:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {'noop_reason': '<% ctx().noop_reason %>', 'adapter': '<% ctx().adapter_mode %>'}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  noop_no_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {'noop_reason': '<% ctx().noop_reason %>', 'adapter': '<% ctx().adapter_mode %>'}
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
+
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: <% ctx().error %>
+      step: workflow_error
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

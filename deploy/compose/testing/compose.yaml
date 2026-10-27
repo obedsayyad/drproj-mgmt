@@ -1,0 +1,21 @@
+# Testing VM stack (docs/08): k6 jobs and result artifacts. Scripts arrive with tests/load (later phase).
+# Started on demand by the ops API/StackStorm; never auto-started:  docker compose --profile run run --rm k6 run /scripts/<file>
+name: drproj-testing
+
+services:
+  k6:
+    profiles: [run]
+    restart: "no"
+    image: grafana/k6:${K6_TAG:-2.3.0}
+    mem_limit: 768m
+    volumes:
+      - ../../../tests/load:/scripts:ro
+      - k6_results:/results
+    healthcheck:
+      test: ["CMD", "k6", "version"]
+      interval: 60s
+      timeout: 5s
+      retries: 1
+
+volumes:
+  k6_results: {}

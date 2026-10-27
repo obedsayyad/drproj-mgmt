@@ -1,0 +1,21 @@
+---
+# Rotation step 3: reissue this application host's leaf from the NEW CA. Run only after step 2 is confirmed on every verifier.
+- name: Check the new CA exists
+  ansible.builtin.stat:
+    path: "{{ ca_dir }}/{{ ca_new_cert_name }}"
+  delegate_to: "{{ ca_mgmt_host }}"
+  become: true
+  register: ca_new_stat
+
+- name: Refuse to reissue before step 1 and 2 have run
+  ansible.builtin.assert:
+    that: ca_new_stat.stat.exists
+    fail_msg: "no new CA: run playbooks/ca-rotate-bundle.yml first (never switch leaves before the bundle holds both CAs)"
+    quiet: true
+
+- name: Reissue the leaf from the new CA
+  ansible.builtin.include_tasks: issue.yml
+  vars:
+    ca_signing_crt: "{{ ca_dir }}/{{ ca_new_cert_name }}"
+    ca_signing_key: "{{ ca_dir }}/{{ ca_new_key_name }}"
+    ca_force_reissue: true

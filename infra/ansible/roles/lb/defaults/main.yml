@@ -1,0 +1,3 @@
+---
+# Placeholder so defaults/ exists; the lb role is a scaffold until P6.
+lb_phase: "P6"

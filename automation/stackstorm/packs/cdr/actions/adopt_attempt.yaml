@@ -1,0 +1,12 @@
+---
+name: adopt_attempt
+pack: cdr
+description: "Restart found the attempt recorded: classify by provider tags (ready, failed, present, absent, unknown); never creates."
+runner_type: python-script
+entry_point: adopt_attempt.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  provider: {type: string, required: true}
+  slot_key: {type: string, required: true}
+  attempt: {type: integer, required: true}

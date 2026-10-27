@@ -1,0 +1,10 @@
+---
+name: policy_validate
+pack: cdr
+description: "Apply_policy step 1: load the pending version, re-check the docs/03 bounds, and report what the change touches (capacity, sections whose compile step is not implemented yet)."
+runner_type: python-script
+entry_point: policy_validate.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}

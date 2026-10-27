@@ -1,0 +1,21 @@
+---
+# CA lives on the management VM only (docs/08 "Certificates"). The key is mode 0400; its directory 0700.
+ca_action: issue # init | issue | rotate_bundle | rotate_reissue | rotate_drop_old
+ca_dir: "{{ inputs.tls.ca_key_path | dirname }}"
+ca_key_name: "{{ inputs.tls.ca_key_path | basename }}"
+ca_cert_name: ca.crt
+ca_new_key_name: ca-new.key
+ca_new_cert_name: ca-new.crt
+ca_bundle_name: ca-bundle.crt
+ca_ca_days: 3650
+ca_leaf_days: 90
+ca_leaf_renew_before_days: 30
+ca_leaf_dir: /etc/drproj/app/certs
+ca_trust_dir: /etc/drproj/trust
+ca_mgmt_host: "{{ groups['management'][0] }}"
+# Which CA signs: the current one, or the new one during the reissue step of a rotation.
+ca_signing_crt: "{{ ca_dir }}/{{ ca_cert_name }}"
+ca_signing_key: "{{ ca_dir }}/{{ ca_key_name }}"
+ca_force_reissue: false
+# Dropping the old CA is irreversible for verifiers still holding only the old bundle: it needs an explicit confirmation.
+ca_confirm_drop_old: false

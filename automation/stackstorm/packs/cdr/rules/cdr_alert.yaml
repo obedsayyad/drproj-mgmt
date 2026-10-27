@@ -1,0 +1,13 @@
+---
+name: cdr_alert
+pack: cdr
+description: Alertmanager webhook (POST /v1/webhooks/cdr_alert, St2-Api-Key). Records alerts and turns app.cpu.high/low, app.primary.unhealthy and metrics.stale into capacity intents (cdr.alert_intent).
+enabled: true
+trigger:
+  type: core.st2.webhook
+  parameters:
+    url: cdr_alert
+action:
+  ref: cdr.alert_intent
+  parameters:
+    body: "{{ trigger.body }}"

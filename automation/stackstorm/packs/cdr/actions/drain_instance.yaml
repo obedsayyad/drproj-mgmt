@@ -1,0 +1,14 @@
+---
+name: drain_instance
+pack: cdr
+description: "SIMULATED drain bounded by policy scale_in.drain_timeout_seconds; a timeout is a result, never a delete."
+runner_type: python-script
+entry_point: drain_instance.py
+enabled: true
+parameters:
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  provider: {type: string, required: true}
+  resource_id: {type: string, required: true}
+  timeout_seconds: {type: integer}
+  poll_seconds: {type: integer, default: 2}

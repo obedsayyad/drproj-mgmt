@@ -1,0 +1,12 @@
+---
+name: reconcile_every_60s
+pack: cdr
+description: Reconcile every 60 s (coordination.reconcile_interval_seconds); an overlapping tick is cancelled by policies/reconcile_single.yaml.
+enabled: true
+trigger:
+  type: core.st2.IntervalTimer
+  parameters:
+    unit: seconds
+    delta: 60
+action:
+  ref: cdr.reconcile

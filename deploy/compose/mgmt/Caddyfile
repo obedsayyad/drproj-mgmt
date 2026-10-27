@@ -1,0 +1,22 @@
+{
+	email {$ACME_EMAIL}
+	acme_ca {$ACME_CA}
+}
+
+import snippets.caddy
+
+{$OPS_HOST} {
+	import ops_site
+}
+
+{$GRAFANA_HOST} {
+	import grafana_site
+}
+
+{$ST2_HOST} {
+	import st2_site
+}
+
+{$STATS_HOST} {
+	import stats_site
+}
