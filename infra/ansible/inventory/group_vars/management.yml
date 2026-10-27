@@ -1,0 +1,4 @@
+---
+# Management-VM layout (docs/12, docs/15): the controller checkout is /opt/drproj/ansible and its inputs sit beside it at mode 0600.
+# all.yml uses this as the default inputs_file only when the management host is the local connection (gen-inventory.py --local-role management).
+management_inputs_file: /opt/drproj/ansible/deployment-inputs.local.json

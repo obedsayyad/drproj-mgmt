@@ -1,0 +1,308 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+# CI never deploys and never touches a cloud account: Terraform runs init -backend=false, validate and mock-provider tests only.
+# Repos sit side by side under the workspace (drproj-mgmt/ and drproj-app/): the integration tests read ../drproj-app/database/migrations.
+env:
+  PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+  PG_PASSWORD: ci-only-throwaway
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci-only-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgres://postgres:ci-only-throwaway@127.0.0.1:5432/postgres
+    defaults:
+      run:
+        working-directory: drproj-mgmt
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: drproj-mgmt
+          submodules: true
+      - uses: actions/checkout@v4
+        with:
+          repository: obedsayyad/drproj-app
+          path: drproj-app
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: drproj-mgmt/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: drproj-mgmt/.nvmrc
+          cache: pnpm
+          cache-dependency-path: drproj-mgmt/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:integration
+
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci-only-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgres://postgres:ci-only-throwaway@127.0.0.1:5432/postgres
+      KEEPALIVE_TEST_URL: postgres://cdr_keepalive_ci:ci-only-throwaway@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: drproj-mgmt
+          submodules: true
+      - uses: actions/checkout@v4
+        with:
+          repository: obedsayyad/drproj-app
+          path: drproj-app
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: drproj-app/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: drproj-app/.nvmrc
+          cache: pnpm
+          cache-dependency-path: drproj-app/pnpm-lock.yaml
+      - name: Migrate the test database (drproj-app migrations)
+        working-directory: drproj-app
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @drproj/migrations exec tsx src/cli.ts --database-url-env TEST_DATABASE_URL
+      - name: Login role that is a member of dr_ops (keep-alive and alert tests)
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE cdr_keepalive_ci LOGIN PASSWORD '${PG_PASSWORD}'" \
+            -c "GRANT dr_ops TO cdr_keepalive_ci"
+      # psycopg 3.3 needs Python 3.10, as the st2 image has.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install pack test dependencies (Orquesta 1.6.0 as shipped in st2 3.9; not on PyPI)
+        run: |
+          python -m pip install "psycopg[binary]==3.3.6" requests==2.32.3 pyyaml responses==0.25.3 jsonschema pytest
+          python -m pip install networkx==3.1 yaql jinja2 six stevedore ujson chardet
+          python -m pip install --no-deps "git+https://github.com/StackStorm/orquesta.git@v1.6.0"
+      - name: Pack tests (no skips allowed)
+        working-directory: drproj-mgmt/automation/stackstorm/packs/cdr
+        run: |
+          python -m pytest tests -q -rs | tee "$RUNNER_TEMP/pytest.out"
+          if grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/pytest.out"; then echo "pack tests skipped; expected 0" >&2; exit 1; fi
+
+  promtool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: promtool check config / rules / test rules, amtool check-config
+        run: bash tests/compose/promtool.sh
+
+  ansible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: infra/ansible
+    env:
+      ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/.ansible-collections
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ansible-core==2.17.14 ansible-lint "psycopg[binary]==3.3.6" pytest pyyaml
+      - run: ansible-galaxy collection install -p "$ANSIBLE_COLLECTIONS_PATH" -r requirements.yml
+      - run: ansible-lint
+      - name: Inventory and role unit tests
+        run: python -m pytest tests -q
+      - name: Syntax-check every playbook against an inventory generated from the example inputs
+        run: |
+          python scripts/gen-inventory.py --inputs ../../docs/config/deployment-inputs.example.json --output inventory/generated.yml
+          export DR_AUTOMATION_URL=
+          for p in playbooks/*.yml; do echo "== $p"; ansible-playbook --syntax-check -i inventory/generated.yml "$p"; done
+      - name: inputs_file defaults to the management layout only when management is the local connection
+        run: |
+          local_file() { ansible -i inventory/generated.yml primary-vm -m debug -a var=inputs_file | sed -n 's/.*"inputs_file": "\(.*\)".*/\1/p'; }
+          python scripts/gen-inventory.py --inputs ../../docs/config/deployment-inputs.example.json --local-role management --output inventory/generated.yml
+          [ "$(local_file)" = /opt/drproj/ansible/deployment-inputs.local.json ]
+          python scripts/gen-inventory.py --inputs ../../docs/config/deployment-inputs.example.json --output inventory/generated.yml
+          case "$(local_file)" in */deploy/inputs/deployment-inputs.local.json) ;; *) echo "unexpected default" >&2; exit 1 ;; esac
+
+  terraform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.55.1
+      - run: terraform fmt -recursive -check
+      - run: tflint --recursive
+      - name: init -backend=false, validate and terraform test (mock providers; native amd64)
+        run: |
+          for d in slot-do slot-linode modules/do_droplet modules/linode_instance; do
+            echo "== $d"
+            (cd "$d" && terraform init -backend=false -input=false && terraform validate && terraform test)
+          done
+
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker run --rm -v "$PWD:/code" -w /code bats/bats:1.11.1 tests/infra
+      - run: docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:stable scripts/tf-slot.sh
+
+  operations-image:
+    needs: [node]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/obedsayyad/drproj-operations
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/operations/Dockerfile
+          platforms: linux/amd64
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=operations
+          cache-to: type=gha,scope=operations,mode=max
+      - name: Record digest
+        if: env.PUSH == 'true'
+        run: |
+          { echo "### drproj-operations"; echo; echo '```'; echo "ghcr.io/obedsayyad/drproj-operations@${{ steps.build.outputs.digest }}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  runner-image:
+    needs: [terraform, ansible]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/obedsayyad/drproj-runner
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+      - name: Build (linux/amd64) and load for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: automation/runner/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: drproj-runner:ci
+          provenance: false
+          cache-from: type=gha,scope=runner
+          cache-to: type=gha,scope=runner,mode=max
+      - name: Smoke - terraform init with no network resolves providers from the offline mirror
+        run: |
+          work=$(mktemp -d)
+          cp -R infra/terraform/. "$work/"
+          chmod -R a+rwX "$work"
+          for d in slot-do slot-linode; do
+            echo "== $d"
+            docker run --rm --network none -v "$work:/w" -w "/w/$d" --entrypoint terraform drproj-runner:ci init -backend=false -input=false
+          done
+          docker run --rm --network none --entrypoint ansible-playbook drproj-runner:ci --version
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        name: Push (same layers as the smoke-tested image)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: automation/runner/Dockerfile
+          platforms: linux/amd64
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=runner
+      - name: Record digest
+        if: env.PUSH == 'true'
+        run: |
+          { echo "### drproj-runner"; echo; echo '```'; echo "ghcr.io/obedsayyad/drproj-runner@${{ steps.build.outputs.digest }}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
