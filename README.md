@@ -1,7 +1,7 @@
 # drproj-mgmt
 
 Management repository (`obedsayyad/drproj-mgmt`): pnpm workspace (Node 22+, TypeScript strict, Vitest).
-`docs/` is the `drproj-docs` bundle (git submodule; a local symlink to `../drproj-docs` until the repos are pushed).
+`docs/` is the `drproj-docs` bundle (git submodule; run `git submodule update --init` after cloning, or clone with `--recurse-submodules`).
 
 Packages: `apps/operations` (management API + recovery dashboard; see its README), `packages/contracts` (types generated from `docs/spec`), `tests/integration`.
 Later phases add `infra/terraform`, `infra/ansible`, `automation/stackstorm`, `deploy/compose/mgmt`, `monitoring` and `tests/load` here (docs/docs/11, GitHub repositories).

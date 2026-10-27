@@ -29,7 +29,6 @@ _to_delete
 .t_*
 .t[0-9]*
 .promtool.*
-docs
 # Compose secret material (names only committed)
 deploy/compose/**/secrets/*
 !deploy/compose/**/secrets/.gitignore
