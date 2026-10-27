@@ -136,13 +136,19 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: infra/ansible
+        working-directory: drproj-mgmt/infra/ansible
     env:
       ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/.ansible-collections
     steps:
+      # The env-parity tests compare the app role with ../drproj-app/deploy/compose/app.
       - uses: actions/checkout@v4
         with:
+          path: drproj-mgmt
           submodules: true
+      - uses: actions/checkout@v4
+        with:
+          repository: obedsayyad/drproj-app
+          path: drproj-app
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
