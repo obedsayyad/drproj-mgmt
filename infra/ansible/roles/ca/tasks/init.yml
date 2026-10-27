@@ -15,7 +15,15 @@
     creates: "{{ ca_dir }}/{{ ca_key_name }}"
   become: true
 
+# In check mode the key is not created, so stat it and skip the dependent tasks instead of failing (lets --check preview the whole play).
+- name: Look for the CA private key
+  ansible.builtin.stat:
+    path: "{{ ca_dir }}/{{ ca_key_name }}"
+  register: ca_key_stat
+  become: true
+
 - name: Restrict the CA private key to read-only for root
+  when: ca_key_stat.stat.exists or not ansible_check_mode
   ansible.builtin.file:
     path: "{{ ca_dir }}/{{ ca_key_name }}"
     owner: root
@@ -46,7 +54,14 @@
     creates: "{{ ca_dir }}/{{ ca_cert_name }}"
   become: true
 
+- name: Look for the CA certificate
+  ansible.builtin.stat:
+    path: "{{ ca_dir }}/{{ ca_cert_name }}"
+  register: ca_cert_stat
+  become: true
+
 - name: Create the trust bundle (the CA alone) if there is none
+  when: ca_cert_stat.stat.exists or not ansible_check_mode
   ansible.builtin.copy:
     src: "{{ ca_dir }}/{{ ca_cert_name }}"
     dest: "{{ ca_dir }}/{{ ca_bundle_name }}"

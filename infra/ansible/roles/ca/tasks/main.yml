@@ -2,8 +2,8 @@
 # One role, one action per play (see playbooks/ca-*.yml); each rotation step is its own tagged play so the order cannot be skipped by accident.
 - name: Check the requested CA action
   ansible.builtin.assert:
-    that: ca_action in ['init', 'issue', 'rotate_bundle', 'rotate_reissue', 'rotate_drop_old']
-    fail_msg: "ca_action must be init, issue, rotate_bundle, rotate_reissue or rotate_drop_old"
+    that: ca_action in ['init', 'issue', 'distribute_bundle', 'rotate_bundle', 'rotate_reissue', 'rotate_drop_old']
+    fail_msg: "ca_action must be init, issue, distribute_bundle, rotate_bundle, rotate_reissue or rotate_drop_old"
     quiet: true
   tags: [ca, always]
 

@@ -29,3 +29,7 @@ bootstrap_disable_password_auth: false
 bootstrap_authorize_from_connecting_user: false
 # yes for the fixed hosts (known_hosts filled at first contact, docs/15); group_vars/cloud_app.yml sets accept-new for cloud VMs.
 bootstrap_host_key_policy: "yes"
+# Management VM only: where the permission check script is installed, and the owner-only directories it checks by default (docs/08, docs/09, docs/12).
+bootstrap_scripts_dir: /opt/drproj/scripts
+bootstrap_backup_dir: "{{ inputs.backup.dir | default('/var/backups/drproj') }}"
+bootstrap_tf_state_dir: "{{ inputs.cloud_application.terraform.tf_state_dir | default('/var/lib/drproj/terraform') }}"

@@ -1,0 +1,11 @@
+---
+# Place the management VM's trust bundle on every verifier host (primary, load balancer, cloud application VMs). Idempotent; the rotation
+# plays do their own distribution. Services that read the bundle reload it in their own roles.
+- name: Distribute the backend CA trust bundle
+  hosts: primary:lb:cloud_app
+  become: true
+  roles:
+    - role: ca
+      vars:
+        ca_action: distribute_bundle
+      tags: [ca, ca_distribute]

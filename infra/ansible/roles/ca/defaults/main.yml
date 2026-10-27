@@ -1,6 +1,6 @@
 ---
 # CA lives on the management VM only (docs/08 "Certificates"). The key is mode 0400; its directory 0700.
-ca_action: issue # init | issue | rotate_bundle | rotate_reissue | rotate_drop_old
+ca_action: issue # init | issue | distribute_bundle | rotate_bundle | rotate_reissue | rotate_drop_old
 ca_dir: "{{ inputs.tls.ca_key_path | dirname }}"
 ca_key_name: "{{ inputs.tls.ca_key_path | basename }}"
 ca_cert_name: ca.crt

@@ -195,6 +195,36 @@
         state: present
         reload: true
 
+# ---- management VM: owner-only backup and Terraform state directories, and scripts/check-perms.sh to verify them
+# (BACKUP_DIR=<backup.dir> TFSTATE_DIR=<tf_state_dir> /opt/drproj/scripts/check-perms.sh).
+# roles/bootstrap/files/check-perms.sh must equal scripts/check-perms.sh (tests/test_check_perms_copy.py).
+- name: Prepare the backup and Terraform state directories and the permission check on the management VM
+  when: "'management' in group_names"
+  tags: [bootstrap, perms_check]
+  block:
+    - name: Create the owner-only backup and state directories (0700)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop: "{{ ([bootstrap_backup_dir, bootstrap_tf_state_dir | dirname, bootstrap_tf_state_dir]) | unique }}"
+    - name: Create the scripts directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_scripts_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+    - name: Install check-perms.sh
+      ansible.builtin.copy:
+        src: check-perms.sh
+        dest: "{{ bootstrap_scripts_dir }}/check-perms.sh"
+        owner: root
+        group: root
+        mode: "0755"
+
 # ---- application hosts: node_exporter web config (TLS + basic auth). node_exporter itself runs in the app Compose stack.
 - name: Prepare the node_exporter web config on application hosts
   when: "'cloud_app' in group_names or 'primary' in group_names"
@@ -216,7 +246,9 @@
         path: "{{ bootstrap_node_exporter_password_file }}"
       register: bootstrap_password_file
     - name: Generate the basic-auth password on the host (0600, secrets directory only)
-      ansible.builtin.shell: umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > "$PW_FILE"
+      ansible.builtin.shell: set -o pipefail && umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > "$PW_FILE"
+      args:
+        executable: /bin/bash
       environment:
         PW_FILE: "{{ bootstrap_node_exporter_password_file }}"
       when: not bootstrap_password_file.stat.exists or (bootstrap_rotate_node_exporter_password | default(false) | bool)

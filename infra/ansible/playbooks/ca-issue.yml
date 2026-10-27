@@ -7,3 +7,7 @@
       vars:
         ca_action: issue
       tags: [ca, ca_issue]
+
+# Verifiers need the bundle before they can check the new leaves.
+- name: Distribute the trust bundle
+  ansible.builtin.import_playbook: ca-distribute.yml
