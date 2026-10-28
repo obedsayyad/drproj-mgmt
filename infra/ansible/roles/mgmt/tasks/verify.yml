@@ -1,0 +1,32 @@
+---
+- name: Wait for the ops API through Caddy
+  ansible.builtin.uri:
+    url: "https://{{ inputs.ingress.operations }}/api/overview"
+    validate_certs: "{{ not mgmt_acme_staging | bool }}"
+    return_content: true
+    status_code: 200
+    timeout: 10
+  register: mgmt_overview
+  retries: "{{ mgmt_ready_retries }}"
+  delay: "{{ mgmt_ready_delay }}"
+  until: mgmt_overview.status | default(0) == 200
+  when: not ansible_check_mode
+
+- name: Check the integration states
+  ansible.builtin.assert:
+    that:
+      - mgmt_overview.json.integrations.supabase.state == 'fresh'
+      - mgmt_overview.json.integrations.stackstorm.state == 'fresh'
+      - mgmt_overview.json.integrations.prometheus.state == 'fresh'
+      - mgmt_overview.json.integrations.providers.state == 'unavailable'
+    fail_msg: "unexpected integration states: {{ mgmt_overview.json.integrations | to_json }}"
+    quiet: true
+  when: not ansible_check_mode
+  # haproxy is "not probed in this phase" (state unavailable) and is checked by hand; it is not part of this gate.
+
+- name: Report
+  ansible.builtin.set_stats:
+    data:
+      mgmt_ready: true
+      acme_staging: "{{ mgmt_acme_staging }}"
+  when: not ansible_check_mode

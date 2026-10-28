@@ -1,5 +1,21 @@
 ---
-- name: Fail because the mgmt role is not implemented yet (P6/P7)
-  ansible.builtin.fail:
-    msg: "not_implemented: the mgmt role lands in P6/P7 (docs/11)"
-  tags: [mgmt, not_implemented]
+# Management stack bring-up (docs/15 §8). Order: preflight, secrets, render, start, StackStorm registration, verify.
+- name: Preflight
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [mgmt, preflight, always]
+
+- name: Secrets and rendered configuration
+  ansible.builtin.import_tasks: secrets.yml
+  tags: [mgmt, secrets, config]
+
+- name: Render the environment and scrape targets
+  ansible.builtin.import_tasks: render.yml
+  tags: [mgmt, config]
+
+- name: Start the stack and register the cdr pack
+  ansible.builtin.import_tasks: up.yml
+  tags: [mgmt, deploy]
+
+- name: Verify
+  ansible.builtin.import_tasks: verify.yml
+  tags: [mgmt, verify]

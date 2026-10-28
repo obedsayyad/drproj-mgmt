@@ -1,0 +1,27 @@
+# Managed by Ansible (mgmt role). Mode 0600. No provider tokens: token_env/ssh_key_id_env only name environment variables.
+# Provisioning is impossible until DIGITALOCEAN_API_TOKEN / LINODE_API_TOKEN and real region/size/image values exist.
+# The stackstorm login is a member of dr_ops and dr_automation (scripts/db-init/create-stackstorm-login.sh).
+supabase_ops_url: "{{ mgmt_pack_db_url }}"
+provider_adapter: real
+policy_compile: simulation
+prometheus_url: http://prometheus:9090
+prometheus_expected_jobs: relief
+real_adapter:
+  tf_slot_script: /opt/drproj/scripts/tf-slot.sh
+  tf_state_dir: "{{ inputs.cloud_application.terraform.tf_state_dir }}"
+  ansible:
+    playbook_dir: /opt/drproj/ansible
+    inputs_path: /etc/drproj/deployment-inputs.local.json
+    ssh_key_path: /run/secrets/cloud_vm_key
+  digitalocean:
+    token_env: env://DIGITALOCEAN_API_TOKEN
+    region: {{ inputs.cloud_application.digitalocean.region | default(mgmt_pack_placeholder, true) }}
+    size: {{ inputs.cloud_application.digitalocean.size_id | default(mgmt_pack_placeholder, true) }}
+    image: {{ inputs.cloud_application.digitalocean.image_id | default(mgmt_pack_placeholder, true) }}
+    ssh_key_id_env: env://DIGITALOCEAN_SSH_KEY_ID
+  linode:
+    token_env: env://LINODE_API_TOKEN
+    region: {{ inputs.cloud_application.linode.region | default(mgmt_pack_placeholder, true) }}
+    size: {{ inputs.cloud_application.linode.size_id | default(mgmt_pack_placeholder, true) }}
+    image: {{ inputs.cloud_application.linode.image_id | default(mgmt_pack_placeholder, true) }}
+    ssh_key_id_env: env://LINODE_SSH_KEY_LABEL

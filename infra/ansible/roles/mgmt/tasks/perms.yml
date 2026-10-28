@@ -1,0 +1,12 @@
+---
+# Hand each secret file to the container user that reads it (mode stays 0600, except st2_api_key 0640; the directory is 0700 root).
+- name: Set secret file ownership for the container users
+  ansible.builtin.file:
+    path: "{{ mgmt_secrets_dir }}/{{ item.file }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ mgmt_secret_owners }}"
+  loop_control:
+    label: "{{ item.file }}"
+  when: not ansible_check_mode

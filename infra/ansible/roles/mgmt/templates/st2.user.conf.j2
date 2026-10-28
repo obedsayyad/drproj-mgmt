@@ -1,0 +1,7 @@
+# Managed by Ansible (mgmt role). Mode 0600.
+[database]
+username = root
+password = {{ mgmt_mongo_password }}
+
+[messaging]
+url = amqp://drproj:{{ mgmt_rabbit_password }}@rabbitmq:5672/

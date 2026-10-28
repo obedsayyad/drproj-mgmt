@@ -1,3 +1,62 @@
 ---
-# Placeholder so defaults/ exists; the mgmt role is a scaffold until P6/P7.
-mgmt_phase: "P6/P7"
+# Management stack (docs/08, docs/15 "Management stack bring-up"). Runs on the management VM (ansible_connection local).
+mgmt_src: /opt/drproj/src/drproj-mgmt
+mgmt_compose_dir: "{{ mgmt_src }}/deploy/compose/mgmt"
+mgmt_config_dir: /etc/drproj/mgmt
+mgmt_secrets_dir: /etc/drproj/mgmt/secrets
+mgmt_env_file: /etc/drproj/mgmt/mgmt.env
+mgmt_host_secrets_dir: /etc/drproj/secrets
+mgmt_ca_bundle: /etc/drproj/ca/ca-bundle.crt
+mgmt_supabase_ca: /etc/drproj/ca/supabase-root-2021.crt
+mgmt_project: drproj-mgmt
+
+mgmt_hosts:
+  - "{{ inputs.ingress.operations }}"
+  - "{{ inputs.ingress.grafana }}"
+  - "{{ inputs.ingress.stackstorm }}"
+  - "{{ inputs.ingress.haproxy_stats }}"
+mgmt_public_ip: "{{ inputs.hosts.management.public_ip }}"
+
+mgmt_acme_email: "{{ inputs.ingress.acme_email | default('', true) }}"
+mgmt_acme_staging: "{{ inputs.ingress.acme_staging | default(true) | bool }}"
+mgmt_acme_ca: >-
+  {{ 'https://acme-staging-v02.api.letsencrypt.org/directory' if mgmt_acme_staging | bool
+     else 'https://acme-v02.api.letsencrypt.org/directory' }}
+
+mgmt_registry_prefix: "{{ inputs.registry.host }}/{{ inputs.registry.namespace }}"
+mgmt_ops_image: "{{ mgmt_registry_prefix }}/{{ inputs.registry.images.operations }}@{{ inputs.registry.operations_image_digest }}"
+mgmt_runner_image: "{{ mgmt_registry_prefix }}/{{ inputs.registry.images.runner }}@{{ inputs.registry.runner_image_digest }}"
+
+# Secret env files created by DB-1 (names only here).
+mgmt_ops_env_file: "{{ mgmt_host_secrets_dir }}/db-ops.env"
+mgmt_automation_env_file: "{{ mgmt_host_secrets_dir }}/db-automation.env"
+mgmt_required_env_files: [db-ops.env, db-automation.env, db-backup.env, db-restore.env, db-stackstorm.env]
+
+# The primary's node_exporter password is generated on the primary (bootstrap role); it is read once and stored on management.
+mgmt_primary_host: primary-vm
+mgmt_primary_ip: "{{ inputs.hosts.primary.public_ip }}"
+mgmt_node_exporter_password_src: /etc/drproj/secrets/node-exporter-basic-auth-password
+mgmt_node_exporter_user: prometheus
+
+mgmt_expected_jobs: prometheus,ops,alertmanager,relief,node
+mgmt_ready_retries: 30
+mgmt_ready_delay: 10
+
+# Provider tokens do not exist yet: the real adapter is configured, but provisioning is impossible until they are supplied.
+mgmt_pack_placeholder: REPLACE_ME_BEFORE_PROVISIONING
+
+# Container users that read bind-mounted secret files (docker preserves host ownership, so root:root 0600 is unreadable to them).
+# st2 services and the drproj-runner image run as st2 (uid 103, gid 104); Grafana as 472; Alertmanager and Prometheus as nobody.
+mgmt_st2_uid: 103
+mgmt_st2_gid: 104
+mgmt_grafana_uid: 472
+mgmt_nobody_uid: 65534
+mgmt_secret_owners:
+  - { file: st2.user.conf, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
+  - { file: st2-htpasswd, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
+  - { file: cdr-pack-config.yaml, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
+  - { file: cloud_vm_key, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
+  - { file: grafana_admin_password, owner: "{{ mgmt_grafana_uid }}", group: "0", mode: "0600" }
+  - { file: node_exporter_scrape_password, owner: "{{ mgmt_nobody_uid }}", group: "{{ mgmt_nobody_uid }}", mode: "0600" }
+  # Read by Alertmanager (nobody, as owner) and the startup-reconcile job (st2, through the group): the one 0640 file, in a 0700 directory.
+  - { file: st2_api_key, owner: "{{ mgmt_nobody_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0640" }

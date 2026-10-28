@@ -1,5 +1,7 @@
 ---
-# Scaffold (P6/P7): the role reports not_implemented until then.
+# Management stack bring-up (docs/15 "Management stack bring-up"). Run on the management VM:
+#   ansible-playbook playbooks/mgmt.yml --check --diff -e inputs_file=/opt/drproj/ansible/deployment-inputs.local.json
+# Staging vs production certificates follow ingress.acme_staging in the inputs (-e mgmt_acme_staging=false overrides).
 - name: Configure the mgmt host
   hosts: management
   become: true

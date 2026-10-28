@@ -1,0 +1,58 @@
+---
+- name: Check the inputs
+  ansible.builtin.assert:
+    that:
+      - mgmt_acme_email is match('^[^@\s]+@[^@\s]+\.[^@\s]+$')
+      - inputs.registry.operations_image_digest is match('^sha256:[0-9a-f]{64}$')
+      - inputs.registry.runner_image_digest is match('^sha256:[0-9a-f]{64}$')
+      - not (inputs.allow_local_tag | default(false) | bool)
+    fail_msg: "ingress.acme_email must be set and both image digests must be sha256 digests (allow_local_tag must be false)"
+    quiet: true
+
+- name: Check that the source tree is in place
+  ansible.builtin.stat:
+    path: "{{ mgmt_compose_dir }}/compose.ansible.yaml"
+  register: mgmt_src_stat
+  failed_when: not mgmt_src_stat.stat.exists
+  # Sync the repo to {{ mgmt_src }} first (docs/15 §8, step 1); the compose file mounts repo-relative paths.
+
+- name: Resolve every ingress hostname (getent; dig is not installed on management)
+  ansible.builtin.command: "getent ahostsv4 {{ item }}"
+  loop: "{{ mgmt_hosts }}"
+  register: mgmt_dns
+  changed_when: false
+  check_mode: false
+  failed_when: mgmt_dns.rc != 0 or (mgmt_dns.stdout_lines | first | default('')).split() | first | default('') != mgmt_public_ip
+
+- name: Look for our own Caddy (docker CLI; the controller venv has no Docker SDK)
+  ansible.builtin.command: "docker ps -q --filter name=^{{ mgmt_project }}-caddy-1$"
+  register: mgmt_caddy_info
+  changed_when: false
+  check_mode: false
+
+- name: Find listeners on 80 and 443
+  ansible.builtin.command: ss -H -ltn '( sport = :80 or sport = :443 )'
+  register: mgmt_listeners
+  changed_when: false
+  check_mode: false
+
+- name: Ports 80 and 443 must be free (or held by this stack's Caddy)
+  ansible.builtin.assert:
+    that: mgmt_listeners.stdout | trim | length == 0 or mgmt_caddy_info.stdout | trim | length > 0
+    fail_msg: "something other than {{ mgmt_project }}-caddy-1 listens on 80/443: {{ mgmt_listeners.stdout }}"
+    quiet: true
+
+- name: Check the database env files
+  ansible.builtin.stat:
+    path: "{{ mgmt_host_secrets_dir }}/{{ item }}"
+  loop: "{{ mgmt_required_env_files }}"
+  register: mgmt_env_stats
+
+- name: The env files must exist with mode 0600
+  ansible.builtin.assert:
+    that: item.stat.exists and item.stat.mode == '0600'
+    fail_msg: "{{ item.item }} is missing or not 0600 in {{ mgmt_host_secrets_dir }}"
+    quiet: true
+  loop: "{{ mgmt_env_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"

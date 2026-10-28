@@ -12,6 +12,10 @@ global:
 rule_files:
   - /etc/prometheus/rules/*.yml
 
+# Extra jobs for real deployments (node_exporter over TLS + basic auth); compose.ansible.yaml mounts them. No match = none.
+scrape_config_files:
+  - /etc/prometheus/scrape.d/*.yml
+
 alerting:
   alertmanagers:
     - static_configs:

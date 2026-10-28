@@ -1,0 +1,105 @@
+---
+- name: Define the compose command
+  ansible.builtin.set_fact:
+    mgmt_compose: >-
+      docker compose --project-name {{ mgmt_project }} --env-file {{ mgmt_env_file }}
+      -f {{ mgmt_compose_dir }}/compose.yaml -f {{ mgmt_compose_dir }}/compose.ansible.yaml
+    mgmt_st2_script: "{{ mgmt_config_dir }}/st2-cli.sh"
+
+- name: Install the st2 CLI wrapper
+  ansible.builtin.template:
+    src: st2-cli.sh.j2
+    dest: "{{ mgmt_st2_script }}"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Validate the rendered Compose project
+  ansible.builtin.command: "{{ mgmt_compose }} config --quiet"
+  args:
+    chdir: "{{ mgmt_compose_dir }}"
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Log in to the registry when a pull credential is supplied
+  ansible.builtin.command: "docker login {{ inputs.registry.host }} -u {{ inputs.github.owner }} --password-stdin"
+  args:
+    stdin: "{{ lookup('ansible.builtin.env', 'GHCR_READONLY_TOKEN') }}"
+  no_log: true
+  changed_when: false
+  when: lookup('ansible.builtin.env', 'GHCR_READONLY_TOKEN') | length > 0 and not ansible_check_mode
+
+# Phase A: everything except the St2-Api-Key consumers' key. st2api must be healthy before the others on a fresh MongoDB.
+- name: Start the stack (compose waits for the healthchecks)
+  community.docker.docker_compose_v2:
+    project_src: "{{ mgmt_compose_dir }}"
+    project_name: "{{ mgmt_project }}"
+    files: [compose.yaml, compose.ansible.yaml]
+    env_files: ["{{ mgmt_env_file }}"]
+    state: present
+    pull: missing
+    wait: true
+    wait_timeout: 300
+  register: mgmt_compose_up
+
+# A replaced single-file bind mount keeps the old inode inside a running container, so recreate the runner when the pack config changed.
+- name: Recreate the actionrunner after a pack config change
+  ansible.builtin.command: "{{ mgmt_compose }} up -d --force-recreate --no-deps --wait st2actionrunner"
+  args:
+    chdir: "{{ mgmt_compose_dir }}"
+  when: mgmt_pack_cfg is changed and not ansible_check_mode
+
+- name: Register the cdr pack (and validate its config against the schema)
+  ansible.builtin.command: "{{ mgmt_compose }} --profile init run --rm --no-deps st2-register"
+  args:
+    chdir: "{{ mgmt_compose_dir }}"
+  register: mgmt_register
+  changed_when: "'Registered' in mgmt_register.stdout or 'registered' in mgmt_register.stderr"
+  when: not ansible_check_mode
+
+- name: Build the pack virtualenv (once; if it does not finish, see docs/15 §8 and stop)
+  ansible.builtin.command:
+    argv: ["{{ mgmt_st2_script }}", run, packs.setup_virtualenv, packs=cdr]
+  register: mgmt_venv
+  when: not ansible_check_mode
+  changed_when: true
+
+# Phase B: the St2-Api-Key exists only once StackStorm is up.
+- name: Create the St2-Api-Key for Alertmanager and the ops API (only when none exists)
+  ansible.builtin.command:
+    argv: ["{{ mgmt_st2_script }}", apikey, create, -k, -m, '{"used_by":"mgmt"}']
+  no_log: true
+  register: mgmt_new_key
+  when: mgmt_st2_api_key | length == 0 and not ansible_check_mode
+  changed_when: true
+
+- name: Store the St2-Api-Key (0600)
+  ansible.builtin.copy:
+    content: "{{ mgmt_new_key.stdout | trim }}"
+    dest: "{{ mgmt_secrets_dir }}/st2_api_key"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: mgmt_new_key is changed
+
+- name: Hand the new key file to its readers
+  ansible.builtin.include_tasks: perms.yml
+  when: mgmt_new_key is changed
+
+- name: Re-render the environment with the key
+  ansible.builtin.include_tasks: render.yml
+  when: mgmt_new_key is changed
+
+- name: Recreate the services that read the key (ops from the env, Alertmanager from the replaced file)
+  ansible.builtin.command: "{{ mgmt_compose }} up -d --force-recreate --no-deps --wait ops alertmanager"
+  args:
+    chdir: "{{ mgmt_compose_dir }}"
+  when: mgmt_new_key is changed
+
+# The 60 s reconcile timer stays off until provider tokens exist (docs/15 §8); the 6 h keep-alive timer stays on.
+- name: Disable the 60 s reconcile rule
+  ansible.builtin.command:
+    argv: ["{{ mgmt_st2_script }}", rule, disable, cdr.reconcile_every_60s]
+  when: not ansible_check_mode
+  changed_when: true

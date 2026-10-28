@@ -1,0 +1,11 @@
+#!/bin/sh
+# Managed by Ansible (mgmt role). Runs the st2 CLI as st2admin inside a one-off container on the Compose network.
+# The password is read from a 0600 file; it is not in any argument list on this host.
+set -eu
+ST2ADMIN_PW="$(cat {{ mgmt_secrets_dir }}/st2admin.pw)"
+export ST2ADMIN_PW
+cd {{ mgmt_compose_dir }}
+exec {{ mgmt_compose }} run --rm --no-deps -T \
+  -e ST2ADMIN_PW -e ST2_API_URL=http://st2api:9101 -e ST2_AUTH_URL=http://st2auth:9100 \
+  --entrypoint /bin/sh st2-register -c \
+  'ST2_AUTH_TOKEN="$(/opt/stackstorm/st2/bin/st2 auth st2admin -p "$ST2ADMIN_PW" -t)"; export ST2_AUTH_TOKEN; exec /opt/stackstorm/st2/bin/st2 "$@"' st2cli "$@"

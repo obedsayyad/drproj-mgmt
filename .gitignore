@@ -37,3 +37,6 @@ deploy/compose/**/secrets/*
 .t16.*
 infra/ansible/inventory/generated.yml
 infra/ansible/.ansible/
+
+# Generated Prometheus file_sd targets (written by the mgmt role)
+monitoring/targets/*/*.json

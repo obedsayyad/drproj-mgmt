@@ -1,0 +1,67 @@
+---
+- name: Read the St2-Api-Key (empty until StackStorm has created it)
+  ansible.builtin.slurp:
+    src: "{{ mgmt_secrets_dir }}/st2_api_key"
+  register: mgmt_st2_key_file
+  no_log: true
+  failed_when: false
+
+- name: Note whether the API key exists
+  ansible.builtin.set_fact:
+    mgmt_st2_api_key: "{{ (mgmt_st2_key_file.content | default('') | b64decode) | trim }}"
+  no_log: true
+
+- name: Read the hash
+  ansible.builtin.slurp:
+    src: "{{ mgmt_secrets_dir }}/ops_basic_auth_hash"
+  register: mgmt_hash_file
+  no_log: true
+  failed_when: false
+
+- name: Read the scrape password
+  ansible.builtin.slurp:
+    src: "{{ mgmt_secrets_dir }}/node_exporter_scrape_password"
+  register: mgmt_scrape_file
+  no_log: true
+  failed_when: false
+
+- name: Parse
+  ansible.builtin.set_fact:
+    mgmt_ops_basic_auth_hash: "{{ (mgmt_hash_file.content | default('') | b64decode) | trim }}"
+    mgmt_scrape_password: "{{ (mgmt_scrape_file.content | default('') | b64decode) | trim }}"
+  no_log: true
+
+- name: Render the Compose environment (mode 0600; the hash is single-quoted so Compose does not interpolate $)
+  ansible.builtin.template:
+    src: mgmt.env.j2
+    dest: "{{ mgmt_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Copy the deployment inputs next to the compose files (mounted into the runner; mode 0600, gitignored)
+  ansible.builtin.copy:
+    src: "{{ inputs_file }}"
+    remote_src: true
+    dest: "{{ mgmt_src }}/deploy/inputs/deployment-inputs.local.json"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Create the Prometheus target directories
+  ansible.builtin.file:
+    path: "{{ mgmt_src }}/monitoring/targets/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [relief, node]
+
+- name: Write the file_sd targets for the fixed primary (relief :9464, node_exporter :9100)
+  ansible.builtin.copy:
+    content: |
+      [{"targets": ["{{ item.target }}"], "labels": {"role": "app"}}]
+    dest: "{{ mgmt_src }}/monitoring/targets/{{ item.job }}/primary.json"
+    mode: "0644"
+  loop:
+    - { job: relief, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.app_metrics }}" }
+    - { job: node, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.node_exporter }}" }

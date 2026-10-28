@@ -2,18 +2,35 @@
 # directory) there:  docker compose -f compose.yaml -f compose.ansible.yaml ...
 # Every host path must exist first: the deployment inputs (deploy/inputs), the cloud VM private key (0600; the private key only, no .pub is mounted or read) and the CA bundle (ca init, docs/15).
 services:
+  # Supabase's pooler certificate chains to a root that Node's bundle lacks (docs/15 §6): trust it explicitly; never disable verification.
+  ops:
+    volumes:
+      - ${SUPABASE_CA_HOST:?set SUPABASE_CA_HOST to the Supabase root CA (/etc/drproj/ca/supabase-root-2021.crt)}:/etc/drproj/supabase-root-2021.crt:ro
+    environment:
+      NODE_EXTRA_CA_CERTS: /etc/drproj/supabase-root-2021.crt
+
   st2actionrunner:
     volumes:
       - ../../inputs/deployment-inputs.local.json:/etc/drproj/deployment-inputs.local.json:ro
       - ${MGMT_SECRETS_DIR:-./secrets}/cloud_vm_key:/run/secrets/cloud_vm_key:ro
       - ${BACKEND_CA_BUNDLE_HOST:?set BACKEND_CA_BUNDLE_HOST to the CA bundle file (/etc/drproj/ca/ca-bundle.crt)}:/etc/drproj/ca-bundle.crt:ro
       - runner_ssh:/home/st2/.ssh
+      - ${SUPABASE_CA_HOST:?set SUPABASE_CA_HOST}:/etc/drproj/supabase-root-2021.crt:ro
     environment:
       # Names only; values come from the management .env (mode 0600). Read by ansible-playbook through AnsibleRunner's allow-list.
       SUPABASE_APP_URL: ${SUPABASE_APP_URL:-}
+      DR_AUTOMATION_URL: ${DR_AUTOMATION_URL:-}
       GHCR_READONLY_TOKEN: ${GHCR_READONLY_TOKEN:-}
       NODE_EXPORTER_BASIC_AUTH_PASSWORD: ${NODE_EXPORTER_BASIC_AUTH_PASSWORD:-}
       BACKEND_CA_BUNDLE: /etc/drproj/ca-bundle.crt
+      PGSSLROOTCERT: /etc/drproj/supabase-root-2021.crt
+
+  # node_exporter scrape (TLS + basic auth): job file, project CA and the scrape password (0600 file, never inline).
+  prometheus:
+    volumes:
+      - ./prometheus/scrape.d:/etc/prometheus/scrape.d:ro
+      - ${BACKEND_CA_BUNDLE_HOST:?set BACKEND_CA_BUNDLE_HOST to the CA bundle file (/etc/drproj/ca/ca-bundle.crt)}:/etc/prometheus/ca-bundle.crt:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/node_exporter_scrape_password:/etc/prometheus/node-exporter-password:ro
 
 volumes:
   runner_ssh: {}

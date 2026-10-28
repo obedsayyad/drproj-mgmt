@@ -1,0 +1,12 @@
+# Real-deployment scrape jobs (mounted by compose.ansible.yaml only; the simulation stack has no node_exporter targets).
+# node_exporter on app hosts: TLS (project CA; the leaf carries the host IP in its SAN) + basic auth.
+scrape_configs:
+  - job_name: node
+    scheme: https
+    tls_config:
+      ca_file: /etc/prometheus/ca-bundle.crt
+    basic_auth:
+      username: prometheus
+      password_file: /etc/prometheus/node-exporter-password
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/node/*.json"]
