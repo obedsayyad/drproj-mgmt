@@ -13,6 +13,7 @@ import { toEventEnvelope, type EventRow } from './events.js';
 import { observeIntegrations } from './integrations.js';
 import { acceptOperation, activePolicy, assertNoActive, requestHash, TERMINAL, type AcceptArgs } from './operations.js';
 import { Code, HttpProblem, sendProblem } from './problem.js';
+import { assertSchemaRevision } from './schema.js';
 
 export interface Deps {
   config: Config;
@@ -119,6 +120,7 @@ export function createApp({ config, pool, dispatcher, webDir }: Deps): express.E
   // ---------- Reads (public) ----------
 
   app.get('/api/overview', async (_req, res) => {
+    const schemaRevision = await assertSchemaRevision(pool);
     const policy = await activePolicy(pool);
     const [instances, slots, simulated, incidents, backup, integrations] = await Promise.all([
       pool.query<{ role: string; provider: string; lifecycle_state: string; routing_mode: string; n: number }>(
@@ -149,6 +151,7 @@ export function createApp({ config, pool, dispatcher, webDir }: Deps): express.E
     res.json({
       observed_at: new Date().toISOString(),
       active_policy_version: policy.version,
+      schema_revision: schemaRevision,
       capacity: {
         desired: { primary: 1, warm: policy.configuration.capacity.warm_instances, cap_digitalocean: caps.digitalocean, cap_linode: caps.linode },
         observed: {

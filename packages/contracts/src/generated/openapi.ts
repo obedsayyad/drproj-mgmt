@@ -958,6 +958,11 @@ export interface components {
             /** Format: date-time */
             observed_at: string;
             active_policy_version: number;
+            /** @description Newest ops migration applied vs the one this build expects; the endpoint answers 503 when they differ. */
+            schema_revision?: {
+                applied: string | null;
+                expected: string;
+            };
             capacity: {
                 desired?: {
                     [key: string]: number;
