@@ -238,7 +238,7 @@ PROBE = {"cdr.open_operation": RECONCILE_RESULTS["cdr.open_operation"]}
 def test_restore_probe_runs_the_heavy_task_under_the_lease_and_records_the_counts():
     counts = {"result": "ok", "task": "restore_probe", "tables_source": 4, "tables_restored": 4}
     status, ran = drive("restore_probe", {"app_key": "relief"}, {**PROBE, "cdr.run_heavy": py(counts)})
-    assert status == statuses.SUCCEEDED and names(ran) == ["open", "start", "acquire", "heavy", "succeed", "release"]
+    assert status == statuses.SUCCEEDED and names(ran) == ["open", "start", "acquire", "heavy", "verifying", "succeed", "release"]  # succeeded is only valid from verifying
     heavy = next(i for t, _a, i in ran if t == "heavy")
     assert heavy == {"task": "restore_probe", "resource_class": "heavy", "operation_id": OP, "lease_generation": GEN}
     assert next(i for t, _a, i in ran if t == "succeed")["outcome"] == counts

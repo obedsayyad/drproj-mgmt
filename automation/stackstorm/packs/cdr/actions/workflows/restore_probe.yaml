@@ -65,11 +65,26 @@ tasks:
       - when: <% succeeded() and result().result.result = 'ok' %>
         publish:
           - probe: <% result().result %>
-        do: succeed
+        do: verifying
       - when: <% succeeded() and result().result.result != 'ok' %>
         publish:
           - error: <% result().result %>
         do: fail_handler
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: restore probe complete
+    next:
+      - when: <% succeeded() %>
+        do: succeed
       - when: <% failed() %>
         publish:
           - error: <% result() %>
