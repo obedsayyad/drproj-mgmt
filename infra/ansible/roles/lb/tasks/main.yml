@@ -223,6 +223,20 @@
   when: not ansible_check_mode
   tags: [lb, deploy]
 
+- name: Hold every unbound server line in maint (lines are not config-disabled; `state ready` cannot clear a config-disabled line)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sock() { docker exec {{ lb_project }}-acme-1 sh -c "echo '$1' | socat stdio UNIX-CONNECT:/var/run/haproxy/admin.sock"; }
+    for s in $(sock 'show servers state be_app' | awk '$5=="0.0.0.0" && $7%2==0 {print $4}'); do
+      sock "set server be_app/$s state maint" >/dev/null; echo "maint $s"
+    done
+  args:
+    executable: /bin/bash
+  register: lb_unbound_maint
+  changed_when: "'maint ' in lb_unbound_maint.stdout"
+  when: not ansible_check_mode
+  tags: [lb, deploy]
+
 - name: Reload HAProxy gracefully when its files changed (master-worker SIGUSR2; the config was validated above and the state dumped)
   ansible.builtin.command: "docker kill --signal=USR2 {{ lb_project }}-haproxy-1"
   when: >-
