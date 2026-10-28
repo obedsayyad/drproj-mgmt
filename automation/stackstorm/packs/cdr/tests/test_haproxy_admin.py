@@ -253,9 +253,9 @@ def test_normal_mode_primary_full_warm_bk_ready_warm_act_maint_unserved_elastic_
     assert hr.plan_mode("normal", m) == ["set server be_app/primary weight 256\n", "set server be_app/elastic-do-1 state maint\n"]
 
 
-def test_overflow_brings_warm_act_ready_at_256_before_putting_warm_bk_in_maint():
+def test_overflow_brings_warm_act_ready_at_256_and_leaves_warm_bk_ready():
     assert hr.plan_mode("overflow", membership()) == [
-        "set server be_app/warm_act weight 256\n", "set server be_app/warm_act state ready\n", "set server be_app/warm_bk state maint\n"]
+        "set server be_app/warm_act weight 256\n", "set server be_app/warm_act state ready\n"]
 
 
 def test_ramp_weights_follow_round_256_s_over_100_minus_s_and_serving_lines_are_full():
@@ -308,17 +308,17 @@ def adapter_for(fake, pki, tmp_path, hooks):
 def test_every_mutation_is_fenced_first_then_dumped_and_audited(fake, pki, tmp_path):
     hooks = Hooks()
     a = adapter_for(fake, pki, tmp_path, hooks)
-    assert a.set_routing("lb", "overflow") == 3
-    assert fake.servers["warm_act"][3:] == [0, 256] and fake.servers["warm_bk"][3] == MAINT
+    assert a.set_routing("lb", "overflow") == 2
+    assert fake.servers["warm_act"][3:] == [0, 256] and fake.servers["warm_bk"][3] == 0
     kinds = [e if e == "fence" else "audit" for e in hooks.events]
-    assert kinds == ["fence", "audit"] * 3
+    assert kinds == ["fence", "audit"] * 2
     dumps = sorted(os.listdir(tmp_path / "store"))
-    assert len(dumps) == 3 and [e[2] for e in hooks.events if e != "fence"] == dumps
+    assert len(dumps) == 2 and [e[2] for e in hooks.events if e != "fence"] == dumps
     assert stat.S_IMODE(os.stat(tmp_path / "store").st_mode) == 0o700
     assert all(stat.S_IMODE(os.stat(tmp_path / "store" / d).st_mode) == 0o600 for d in dumps)
-    assert hx.parse_state((tmp_path / "store" / dumps[-1]).read_text()).get("warm_bk").is_maint  # the last dump shows the final state
+    assert hx.parse_state((tmp_path / "store" / dumps[-1]).read_text()).get("warm_bk").is_ready  # the last dump shows the final state
     assert a.set_routing("lb", "overflow") == 0  # idempotent: nothing sent, nothing dumped
-    assert len(os.listdir(tmp_path / "store")) == 3
+    assert len(os.listdir(tmp_path / "store")) == 2
 
 
 def test_a_lost_lease_stops_before_the_command_is_sent(fake, pki, tmp_path):
@@ -560,7 +560,7 @@ def test_apply_routing_real_writes_one_audit_row_per_command_with_the_dump_name(
     ok, out = a.run(op, gen, "lb", "overflow")
     assert ok and out == {"applied": True, "target": "lb", "mode": "overflow", "simulated": False, "adapter_mode": "real"}
     rows = db.execute("SELECT object, old_value, new_value, operation_id::text FROM ops.audit_events WHERE action = 'haproxy.command' ORDER BY occurred_at, id").fetchall()
-    assert [r[0] for r in rows] == ["lb:be_app/warm_act", "lb:be_app/warm_act", "lb:be_app/warm_bk"] and {r[3] for r in rows} == {op}
+    assert [r[0] for r in rows] == ["lb:be_app/warm_act", "lb:be_app/warm_act"] and {r[3] for r in rows} == {op}
     assert [r[2]["command"] + "\n" for r in rows] == fake.mutations()
     assert sorted(r[2]["dump"] for r in rows) == sorted(os.listdir(tmp_path / "st")) and all(r[2]["adapter_mode"] == "real" for r in rows)
     assert rows[0][1]["state"]["weight"] == 100 and rows[0][2]["state"]["weight"] == 256  # old and new server state

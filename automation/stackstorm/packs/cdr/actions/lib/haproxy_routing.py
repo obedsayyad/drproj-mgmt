@@ -50,8 +50,7 @@ def plan_mode(mode, m, serving=(), step_percent=None):
             if n.startswith("elastic-") and n not in serving:
                 want[n] = ("maint", None)
     elif mode == "overflow":
-        want["warm_act"] = ("ready", FULL)
-        want["warm_bk"] = ("maint", None)
+        want["warm_act"] = ("ready", FULL)  # warm_bk stays ready: the backup line stays UP so standby alerting never goes quiet
     elif mode == "ramp":
         if step_percent is None:
             raise AdminError("bad_step")
