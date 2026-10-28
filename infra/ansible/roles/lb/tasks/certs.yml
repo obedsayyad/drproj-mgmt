@@ -21,7 +21,7 @@
 - name: Issue the admin leaf
   when: lb_leaf_needed | bool and not ansible_check_mode
   block:
-    - name: Generate key and CSR on the host (umask 077: the key is 0600 from the moment it exists)
+    - name: Generate key and CSR on the host (umask 077, so the key is 0600 from the moment it exists)
       ansible.builtin.shell: |
         set -eu
         umask 077
