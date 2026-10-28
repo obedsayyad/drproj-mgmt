@@ -212,3 +212,45 @@ def test_sub_workflows_stop_on_any_failure_so_the_parent_handler_runs(name, inpu
         st, after = drive(name, inputs, attempt_ready, fail=task)
         assert st == statuses.FAILED, f"{name}.{task}: workflow did not fail"
         assert names(after)[-1] == task, f"{name}.{task}: {names(after)[names(after).index(task) + 1:]} ran after the failure"
+
+
+# ------------------------------------------------------------------ reconcile with unconfigured providers, and the restore probe
+RECONCILE_RESULTS = {
+    "cdr.open_operation": py({"operation_id": OP, "created": True, "policy_version": 1}),
+    "cdr.control_state": py({}),
+}
+
+
+@pytest.mark.parametrize("noop_reason, ended_by", [("providers_unconfigured", "noop_unconfigured"), (None, "succeed")])
+def test_reconcile_ends_as_a_noop_only_when_the_pass_reports_one_and_releases_the_lease_either_way(noop_reason, ended_by):
+    summary = {"resumes": [], "orphans": [], **({"noop_reason": noop_reason} if noop_reason else {})}
+    status, ran = drive("reconcile", {"app_key": "relief"}, {**RECONCILE_RESULTS, "cdr.reconcile_pass": py(summary)})
+    assert status == statuses.SUCCEEDED and ended_by in names(ran) and ({"succeed", "noop_unconfigured"} - {ended_by}).isdisjoint(names(ran))
+    assert released_with_generation(ran) and "dispatch" not in names(ran)
+    if noop_reason:
+        outcome = next(i for t, _a, i in ran if t == ended_by)["outcome"]
+        assert outcome["noop_reason"] == "providers_unconfigured" and outcome["observed"]["noop_reason"] == "providers_unconfigured"
+
+
+PROBE = {"cdr.open_operation": RECONCILE_RESULTS["cdr.open_operation"]}
+
+
+def test_restore_probe_runs_the_heavy_task_under_the_lease_and_records_the_counts():
+    counts = {"result": "ok", "task": "restore_probe", "tables_source": 4, "tables_restored": 4}
+    status, ran = drive("restore_probe", {"app_key": "relief"}, {**PROBE, "cdr.run_heavy": py(counts)})
+    assert status == statuses.SUCCEEDED and names(ran) == ["open", "start", "acquire", "heavy", "succeed", "release"]
+    heavy = next(i for t, _a, i in ran if t == "heavy")
+    assert heavy == {"task": "restore_probe", "resource_class": "heavy", "operation_id": OP, "lease_generation": GEN}
+    assert next(i for t, _a, i in ran if t == "succeed")["outcome"] == counts
+
+
+@pytest.mark.parametrize("label, results, fail", [
+    ("probe reports a failure", {"cdr.run_heavy": py({"result": "failed", "code": "restore_failed"})}, None),
+    ("heavy action fails", {"cdr.run_heavy": py({})}, "heavy"),
+    ("lease held elsewhere", {"cdr.acquire_lease": py({"acquired": False, "generation": 0})}, None),
+])
+def test_restore_probe_failures_reach_the_handler_with_the_generation_it_holds(label, results, fail):
+    status, ran = drive("restore_probe", {"app_key": "relief"}, {**PROBE, **results}, fail=fail)
+    assert "fail_handler" in names(ran) and "succeed" not in names(ran), label
+    handler = next(i for t, _a, i in ran if t == "fail_handler")
+    assert handler["lease_generation"] == (0 if label == "lease held elsewhere" else GEN)

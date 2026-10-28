@@ -1,6 +1,6 @@
 # Management VM stack (docs/08). Image tags default to the values in docs/config/deployment-inputs.example.json
 # (versions.*, "unverified until smoke"). mem_limit values are INITIAL ceilings for the 2 vCPU / 4 GB VM and
-# must be measured with a full stack plus a Terraform/restore job (T18); their sum for the always-on services is 3568 MB (3.48 GiB) before swap, leaving ~528 MB of the 4096 MB VM for kernel, page cache and Terraform/Ansible jobs
+# must be measured with a full stack plus a Terraform/restore job (T18); their sum for the always-on services is 3696 MB (3.61 GiB) before swap (grafana 384m since MGMT-STACK-FIX: it ran at 252 of 256 MiB; the VM is 16 GB), leaving ~400 MB of a 4096 MB VM for kernel, page cache and Terraform/Ansible jobs
 # (st2auth stays 192m: 160m was SIGKILLed (137) in the FIX-1 smoke. Ceilings, not expected use; st2 services at 160m sit above the 64-128m levels that were SIGKILLed in the P3.2 smoke but are the tight ones: stream/scheduler/workflowengine/notifier/gc/rules/timers, st2actionrunner 512m; they rely on the 2 GB swap. st2-register (init profile) and restore-test-pg are excluded from the sum.)
 # Named volumes exist only for stateful services. No service publishes a port except Caddy (80/443).
 name: drproj-mgmt
@@ -331,8 +331,8 @@ services:
   grafana:
     <<: *restart
     image: grafana/grafana:${GRAFANA_TAG:-13.2.4}
-    # 192m was OOM-killed at startup in the local smoke (Grafana 13 with provisioning); re-measure in T18.
-    mem_limit: 256m
+    # 192m was OOM-killed at startup in the local smoke (Grafana 13 with provisioning); 256m ran at 98% on the 16 GB management VM (MGMT-STACK), so 384m.
+    mem_limit: 384m
     networks: [internal]
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "false"

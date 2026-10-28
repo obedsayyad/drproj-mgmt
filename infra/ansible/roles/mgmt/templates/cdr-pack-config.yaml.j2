@@ -2,6 +2,9 @@
 # Provisioning is impossible until DIGITALOCEAN_API_TOKEN / LINODE_API_TOKEN and real region/size/image values exist.
 # The stackstorm login is a member of dr_ops and dr_automation (scripts/db-init/create-stackstorm-login.sh).
 supabase_ops_url: "{{ mgmt_pack_db_url }}"
+# restore_probe (T18): backup login (read-only on the app schema) and the restore-test PostgreSQL container (profile restore-test, internal network only).
+backup_db_url: "{{ mgmt_backup_db_url }}"
+restore_test_url: "postgresql://postgres:{{ mgmt_restore_pg_password }}@restore-test-pg:5432/postgres"
 provider_adapter: real
 policy_compile: simulation
 prometheus_url: http://prometheus:9090

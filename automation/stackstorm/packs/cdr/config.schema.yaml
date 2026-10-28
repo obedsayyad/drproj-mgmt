@@ -17,6 +17,24 @@ simulation_state_dir:
   description: Directory for the simulation state and call log (a volume shared with the st2 actionrunner).
   type: string
   default: /opt/stackstorm/cdr-sim
+backup_db_url:
+  description: Session-pooler connection string of the backup login (read-only on the app schema) used by the restore_probe task of cdr.run_heavy. Unset means restore_probe refuses.
+  type: string
+  secret: true
+  required: false
+restore_test_url:
+  description: Superuser-capable connection string of the restore-test PostgreSQL container (profile restore-test); restore_probe creates and drops one scratch database there.
+  type: string
+  secret: true
+  required: false
+pg_dump_bin:
+  description: Optional pg_dump override (tests use a fake; the runner image uses PATH).
+  type: string
+  required: false
+pg_restore_bin:
+  description: Optional pg_restore override (tests use a fake; the runner image uses PATH).
+  type: string
+  required: false
 prometheus_url:
   description: Prometheus base URL used to judge metrics freshness before scaling. Unset means only the simulation adapter may answer.
   type: string

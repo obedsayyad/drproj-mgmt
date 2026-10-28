@@ -1,0 +1,112 @@
+version: 1.0
+description: >
+  T18 heavy-class probe. Opens an operation (kind reconcile: the operation kinds are fixed by ops.open_operation, a dedicated backup kind arrives with P7), takes the capacity lease so no capacity operation runs beside it, runs cdr.run_heavy task restore_probe (pg_dump of the app schema, pg_restore into a scratch database on restore-test-pg, counts compared, scratch database dropped), records the counts as the outcome and releases the lease. A lease held elsewhere or a failed probe fails the operation with a short code.
+input:
+  - app_key: relief
+vars:
+  - operation_id: ''
+  - generation: 0
+  - error: {}
+  - probe: {}
+tasks:
+  open:
+    action: cdr.open_operation
+    input:
+      kind: reconcile
+      source: automation
+      fingerprint: <% 'restore_probe:' + ctx().st2.action_execution_id %>
+      event_name: restore_probe.requested
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - operation_id: <% result().result.operation_id %>
+        do: start
+  start:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.started
+      step: restore_probe
+      status: running
+      execution_id: <% ctx().st2.action_execution_id %>
+    next:
+      - when: <% succeeded() %>
+        do: acquire
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  acquire:
+    action: cdr.acquire_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+        do: heavy
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - error: {code: lease_held}
+        do: fail_handler
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  heavy:
+    action: cdr.run_heavy
+    input:
+      task: restore_probe
+      resource_class: heavy
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+    next:
+      - when: <% succeeded() and result().result.result = 'ok' %>
+        publish:
+          - probe: <% result().result %>
+        do: succeed
+      - when: <% succeeded() and result().result.result != 'ok' %>
+        publish:
+          - error: <% result().result %>
+        do: fail_handler
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: <% ctx().probe %>
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
+  fail_handler:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: <% ctx().error %>
+      step: workflow_error
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10

@@ -3,11 +3,14 @@ temporary directory; only the StackStorm API is a fake (a test double, not Stack
 test_capacity_actions.py."""
 import json
 import os
+import re
+import tempfile
 from real_cfg import REAL_CFG
 import uuid
 
 import psycopg
 import pytest
+import responses
 
 from adopt_attempt import AdoptAttempt
 from alert_intent import AlertIntent
@@ -25,6 +28,7 @@ from scale_in_gate import ScaleInGate
 from st2_api import St2Unavailable
 from supersede_queued import SupersedeQueued
 from test_capacity_actions import ADMIN, db, login_url  # noqa: F401 - db is a fixture
+from test_real_adapter import env  # noqa: F401 - fixture reuse
 from wait_lease import WaitLease
 
 pytestmark = pytest.mark.skipif(not ADMIN, reason="needs TEST_DATABASE_URL (a database migrated through ops/0012)")
@@ -651,3 +655,90 @@ def test_reconcile_pass_stops_when_its_own_lease_was_lost(db, sim, tmp_path):
     a._api = lambda: FakeApi()
     assert a.run(rec, gen + 5, "", "relief") == (False, "lease_lost")
     assert slot(db, "elastic-do-3")[0] == "free"
+
+
+# ------------------------------------------------------------------ reconcile with unconfigured providers (real adapter, no token)
+def _real_reconcile(env, monkeypatch, db, tmp_path):
+    import reconcile_pass
+    from providers.real import RealAdapter
+
+    monkeypatch.setattr(reconcile_pass.providers, "load", lambda _cfg: RealAdapter(env["cfg"]))
+    return lambda: rpass(db, tmp_path, FakeApi())
+
+
+def _unconfigured_incidents(db):
+    return db.execute("SELECT fingerprint FROM ops.incidents WHERE fingerprint LIKE 'provider.unconfigured:%' AND state = 'open' ORDER BY fingerprint").fetchall()
+
+
+def test_reconcile_with_both_providers_unconfigured_is_a_noop_with_one_incident_each(db, tmp_path, env, monkeypatch):
+    monkeypatch.delenv("T_DO_TOKEN")
+    monkeypatch.delenv("T_LI_TOKEN")
+    run = _real_reconcile(env, monkeypatch, db, tmp_path)
+    _, _, out = run()
+    assert out["noop_reason"] == "providers_unconfigured" and sorted(out["providers_unconfigured"]) == ["digitalocean", "linode"]
+    assert not out["orphans"] and not out["resolved_slots"] and not out["released_slots"]
+    assert _unconfigured_incidents(db) == [("provider.unconfigured:digitalocean",), ("provider.unconfigured:linode",)]
+    run()  # a recurring condition opens no second incident
+    assert _unconfigured_incidents(db) == [("provider.unconfigured:digitalocean",), ("provider.unconfigured:linode",)]
+
+
+@responses.activate
+def test_reconcile_with_one_provider_unconfigured_scans_the_other_and_is_not_a_noop(db, tmp_path, env, monkeypatch):
+    monkeypatch.delenv("T_DO_TOKEN")
+    responses.add(responses.GET, re.compile(r"https://api\.linode\.com/v4/linode/instances.*"), json={"data": [], "pages": 1}, status=200)
+    run = _real_reconcile(env, monkeypatch, db, tmp_path)
+    _, _, out = run()
+    assert "noop_reason" not in out and out["providers_unconfigured"] == ["digitalocean"] and out["providers_skipped"] == ["digitalocean"]
+    assert _unconfigured_incidents(db) == [("provider.unconfigured:digitalocean",)]
+    assert len(responses.calls) == 1 and "linode" in responses.calls[0].request.url
+
+
+# ------------------------------------------------------------------ run_heavy restore_probe (T18 heavy half; needs the real pg_dump/pg_restore, same major as the server)
+def _probe(db, tmp_path, gen_delta=0, lease=None, **cfg):
+    from run_heavy import RunHeavy
+
+    op, gen = lease or lease_of(db, "reconcile")
+    a = make(RunHeavy, tmp_path, backup_db_url=ADMIN, restore_test_url=ADMIN, **cfg)
+    return a.run("restore_probe", "heavy", op, gen + gen_delta)
+
+
+def _scratch_dbs(db):
+    return db.execute("SELECT datname FROM pg_database WHERE datname LIKE 'probe\\_%'").fetchall()
+
+
+def test_restore_probe_restores_a_fresh_app_dump_into_a_scratch_database_and_cleans_up(db, tmp_path):
+    import shutil
+
+    assert shutil.which("pg_dump") and shutil.which("pg_restore"), "pg_dump/pg_restore (same major as the server) must be on PATH; this test never skips"
+    ok, res = _probe(db, tmp_path)
+    assert ok and res["result"] == "ok" and res["task"] == "restore_probe" and res["simulated"] is False, res
+    assert res["tables_restored"] == res["tables_source"] > 0 and res["dump_bytes"] > 0
+    assert _scratch_dbs(db) == []
+    assert not any(p.startswith("cdr-probe-") for p in os.listdir(tempfile.gettempdir()))
+
+
+def test_restore_probe_failures_are_short_codes_and_leave_nothing_behind(db, tmp_path):
+    lease = lease_of(db, "reconcile")
+    ok, res = _probe(db, tmp_path, lease=lease, pg_dump_bin="/nonexistent/pg_dump")
+    assert ok and res == {"result": "failed", "code": "dump_failed", "task": "restore_probe", "resource_class": "heavy", "simulated": False}
+    bad = tmp_path / "pg_restore"
+    bad.write_text("#!/bin/sh\necho 'password=hunter2' >&2\nexit 1\n")
+    bad.chmod(0o755)
+    ok, res = _probe(db, tmp_path, lease=lease, pg_restore_bin=str(bad))
+    assert ok and res["code"] == "restore_failed" and "hunter2" not in json.dumps(res)
+    assert _scratch_dbs(db) == []
+
+
+def test_restore_probe_by_a_fenced_worker_runs_no_tool(db, tmp_path):
+    marker = tmp_path / "ran"
+    tool = tmp_path / "pg_dump"
+    tool.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+    tool.chmod(0o755)
+    assert _probe(db, tmp_path, gen_delta=1, pg_dump_bin=str(tool)) == (False, "lease_lost") and not marker.exists()
+
+
+def test_restore_probe_without_its_settings_refuses(db, tmp_path):
+    from run_heavy import RunHeavy
+
+    op, gen = lease_of(db, "reconcile")
+    assert make(RunHeavy, tmp_path).run("restore_probe", "heavy", op, gen) == (False, "restore_probe_config_missing")

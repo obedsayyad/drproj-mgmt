@@ -1,0 +1,9 @@
+---
+name: restore_probe
+pack: cdr
+description: "T18 heavy-class probe (operator-started, not scheduled): pg_dump of the app schema restored into a scratch database on restore-test-pg through cdr.run_heavy. Holds the capacity lease, so it never overlaps a capacity operation. Not the P7 restore: the live app schema is never touched."
+runner_type: orquesta
+entry_point: workflows/restore_probe.yaml
+enabled: true
+parameters:
+  app_key: {type: string, default: relief}

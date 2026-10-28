@@ -5,6 +5,8 @@ Every call answers with an explicit code and never raises for a network or HTTP 
   list_by_tag  the provider is asked for project:cdr, then a resource counts only when ALL requested tags match; any failure -> unknown
   observe      200 -> available; 401/403/429 -> unavailable; anything else -> unknown
   power_on     2xx -> ok; 401/403/429 -> unavailable; anything else -> unknown
+A provider whose token variable is unset is unconfigured: no HTTP call is made and every read answers unavailable with
+code provider_unconfigured (observe: "unavailable"). It never raises and is never absence.
 The token is read from the environment at call time, sent only in the Authorization header, and never logged or returned.
 """
 import json
@@ -17,6 +19,7 @@ from .base import AdapterConfigError, PROJECT_TAG, now_iso
 TIMEOUT_S = 10
 MAX_PAGES = 20
 REFUSED = (401, 403, 429)
+UNCONFIGURED = "provider_unconfigured"
 
 
 def token_from_ref(ref):
@@ -26,6 +29,11 @@ def token_from_ref(ref):
     if not value:
         raise AdapterConfigError("real_token_missing")
     return value
+
+
+def token_configured(ref):
+    name = (ref or "").removeprefix("env://")
+    return bool(name and os.environ.get(name))
 
 
 def tags_to_dict(tags):
@@ -51,13 +59,20 @@ class _Http:
         except requests.RequestException:
             return None
 
+    def configured(self):
+        return token_configured(self._token_ref)
+
     def observe(self):
+        if not self.configured():
+            return "unavailable"
         r = self._request("GET", self.account_path)
         if r is None:
             return "unknown"
         return "available" if r.status_code == 200 else "unavailable" if r.status_code in REFUSED else "unknown"
 
     def get(self, resource_id):
+        if not self.configured():
+            return {"state": "unavailable", "code": UNCONFIGURED, "observed_at": now_iso()}
         r = self._request("GET", self.item_path.format(id=resource_id))
         if r is None:
             return {"state": "unknown", "observed_at": now_iso()}
@@ -71,6 +86,8 @@ class _Http:
             return {"state": "unknown", "observed_at": now_iso()}
 
     def list_by_tag(self, tags):
+        if not self.configured():
+            return {"state": "unavailable", "code": UNCONFIGURED, "resources": []}
         found = []
         for page in range(1, MAX_PAGES + 1):
             r = self._request("GET", **self._list_args(page))
@@ -89,6 +106,8 @@ class _Http:
         return {"state": "unknown", "resources": []}  # more pages than we are willing to read: no answer, not "complete"
 
     def power_on(self, resource_id):
+        if not self.configured():
+            return {"result": "unavailable", "code": UNCONFIGURED}
         r = self._request("POST", **self._power_args(resource_id))
         if r is None:
             return {"result": "unknown"}

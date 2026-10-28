@@ -304,10 +304,18 @@ def test_power_on_linode_and_a_timeout_is_unknown(env):
     assert adapter.power_on("linode", "10") == {"result": "unknown"}
 
 
-def test_a_token_environment_variable_that_is_not_set_is_a_configuration_error(env, monkeypatch):
+@responses.activate
+def test_a_provider_without_a_token_is_unavailable_never_an_exception_and_makes_no_http_call(env, monkeypatch):
     monkeypatch.delenv("T_DO_TOKEN")
-    with pytest.raises(AdapterConfigError, match="real_token_missing"):
-        RealAdapter(env["cfg"]).observe("digitalocean")
+    adapter = RealAdapter(env["cfg"])
+    assert adapter.observe("digitalocean") == "unavailable"
+    listing = adapter.list_by_tag("digitalocean", {"project": "cdr"})
+    assert listing["state"] == "unavailable" and listing["code"] == "provider_unconfigured" and listing["resources"] == []
+    got = adapter.get("digitalocean", "1")
+    assert got["state"] == "unavailable" and got["code"] == "provider_unconfigured"
+    assert adapter.power_on("digitalocean", "1") == {"result": "unavailable", "code": "provider_unconfigured"}
+    assert len(responses.calls) == 0
+    assert absence_evidence(adapter, "digitalocean", "elastic-do-1", ["1"], by="test")[0] is None  # silence is never absence
 
 
 # ------------------------------------------------------------------ per-provider token scoping (each provider has its own Terraform root)

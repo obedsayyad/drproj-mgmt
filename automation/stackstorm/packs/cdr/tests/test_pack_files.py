@@ -150,7 +150,7 @@ def test_run_heavy_is_the_only_terraform_path_and_its_timeout_covers_the_readine
         if name != "run_heavy.py":
             assert "tf_apply(" not in text and "tf_output(" not in text and "subprocess" not in text, f"{name} must not reach Terraform"
     heavy = ACTIONS["run_heavy"]["parameters"]
-    assert heavy["task"]["enum"] == ["deploy", "terraform_apply", "terraform_output", "ansible_deploy"]
+    assert heavy["task"]["enum"] == ["deploy", "terraform_apply", "terraform_output", "ansible_deploy", "restore_probe"]
     policy = json.load(open(os.path.join(PACK, "..", "..", "..", "..", "docs", "config", "policy-defaults.json")))
     from run_heavy import ACTION_TIMEOUT_S, TF_MARGIN_S
 

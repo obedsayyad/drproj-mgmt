@@ -1,17 +1,17 @@
 ---
 name: run_heavy
 pack: cdr
-description: Heavy-class wrapper (one at a time via policies/heavy.yaml); the only path to Terraform (terraform_apply / terraform_output), plus deploy / ansible_deploy (the real adapter runs ansible-playbook app.yml limited to one instance).
+description: Heavy-class wrapper (one at a time via policies/heavy.yaml); the only path to Terraform (terraform_apply / terraform_output), plus deploy / ansible_deploy (the real adapter runs ansible-playbook app.yml limited to one instance), and restore_probe (T18 heavy half, pg_dump of the app schema restored into a scratch database on restore-test-pg, no provider involved).
 runner_type: python-script
 entry_point: run_heavy.py
 enabled: true
 parameters:
   timeout: {type: integer, default: 900}
-  task: {type: string, required: true, enum: [deploy, terraform_apply, terraform_output, ansible_deploy]}
+  task: {type: string, required: true, enum: [deploy, terraform_apply, terraform_output, ansible_deploy, restore_probe]}
   resource_class: {type: string, required: true, enum: [heavy]}
   operation_id: {type: string, required: true}
   lease_generation: {type: integer, required: true}
-  provider: {type: string, required: true, enum: [digitalocean, linode]}
+  provider: {type: string, enum: [digitalocean, linode]}
   resource_id: {type: string}
   slot_key: {type: string}
   attempt: {type: integer, default: 1}

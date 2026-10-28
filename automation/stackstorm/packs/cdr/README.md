@@ -58,7 +58,7 @@ by provider or `"*"`; none are enabled by default): `never_ready`, `ready_after_
 `timeout_ambiguous`), `api_unknown`, `unavailable`, `create_latency_s`. `metrics_fresh` in `state.json` is the simulated CPU-signal freshness.
 Instances reserved while the adapter is the simulation are written `simulated=true`; nothing here touches a cloud.
 
-Tests: `pytest tests -q` (no skips when `TEST_DATABASE_URL` and `KEEPALIVE_TEST_URL` are set). Extra test dependencies: `pyyaml`, and for
+Tests: `pytest tests -q` (no skips when `TEST_DATABASE_URL` and `KEEPALIVE_TEST_URL` are set; the `restore_probe` tests also need `pg_dump`/`pg_restore` of the server's major version on PATH and fail, not skip, without them). Extra test dependencies: `pyyaml`, and for
 `test_workflow_failure_paths.py` Orquesta itself (st2 3.9 ships 1.6.0, which is not on PyPI: `pip install --no-deps` the GitHub `v1.6.0` tag plus
 `networkx==3.1 yaql jinja2 six stevedore ujson jsonschema chardet`). That test drives the real workflow YAML through Orquesta's conductor and
 checks that every failure or no-op branch ends in `fail_operation`/`release_lease` with the held generation, and that each task input matches the
@@ -153,3 +153,7 @@ Pack settings (`config.schema.yaml`): `supabase_ops_url`, `provider_adapter` (re
 ## ansible_deploy through run_heavy (P5.3) - code and fake-binary tests only
 
 `cdr.run_heavy` tasks `deploy` and `ansible_deploy` (real adapter) look the instance up in `ops.instances` (provider + provider resource id, not simulated), then run `ansible-playbook playbooks/app.yml --limit <instance id>` (`actions/lib/providers/ansible_runner.py`) under the same lease check and LeaseKeeper as Terraform. Pack setting `real_adapter.ansible{playbook_dir, inputs_path, ssh_key_path, ansible_bin?}` (paths only). The environment is scrubbed: the ops database URL for `infra/ansible/inventory/cloud_app.py` plus only the secret names the deployment inputs reference. Results: `ok` (+ `state`, `identity`, `image_digest`) when the run exits 0 and the app role's facts match; otherwise `{result: failed, code: deploy_failed | deploy_timeout | deploy_unverified | instance_not_found}`, a failed attempt and never `timeout_ambiguous` (the VM exists). Tests use `tests/fixtures/fake-ansible-playbook.sh`; no host is contacted.
+
+## Restore probe (T18 heavy half)
+
+`cdr.restore_probe` (operator-started, never scheduled) opens a `reconcile`-kind operation (the kinds are fixed by `ops.open_operation`; a dedicated backup kind arrives with P7), takes the capacity lease and runs `cdr.run_heavy` task `restore_probe`: `pg_dump -Fc -n app` from `backup_db_url`, `pg_restore` into a scratch database on `restore_test_url` (the `restore-test` profile container), table sets and row counts compared, scratch database dropped, dump deleted. Credentials go to the tools as `PG*` variables of a minimal environment, never argv; only short codes and counts are returned. It never touches the live app schema and is not the P7 restore.

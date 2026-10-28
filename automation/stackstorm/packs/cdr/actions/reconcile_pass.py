@@ -13,7 +13,8 @@ nothing. With the lease it:
      evidence: found -> bound, listed-and-absent -> free. A releasing slot of a dead operation is freed only on confirmed
      absence, else an incident. A project-tagged resource that no slot or live operation explains is NEVER deleted: its
      slot is held_uncertain when it is free (counted) and an `orphan:<provider>:<id>` incident is opened.
-     A provider that does not answer is skipped.
+     A provider that does not answer is skipped; one with no token (provider_unconfigured) is skipped too and opens ONE
+     `provider.unconfigured:<provider>` incident (fingerprint-deduped); with both unconfigured the pass reports noop_reason=providers_unconfigured.
   3. (P4.4) opens the standby intents the state calls for: `standby_repair` when the warm slot is bound but its instance is failed/unknown, or the warm slot
      is still held_uncertain with no interim warm standby; `scale_in` of the surplus interim-warm slot once the warm slot is bound and ready again. At most one per
      fingerprint and backoff (twice the lease length) since the last one; the workflows re-check everything under the lease. A dead `apply_policy` fails its
@@ -47,7 +48,7 @@ class ReconcilePass(Action):
         self.op, self.gen, self.app = operation_id, lease_generation, app_key
         self.adapter = adapter
         self.summary = {"observe_only": self.observe, "adopted": [], "stale_queued": [], "interrupted": [], "resumes": [], "resolved_slots": [],
-                        "released_slots": [], "orphans": [], "providers_skipped": [], "st2_unknown": [], "errors": [], "intents": [], "policy_failed": []}
+                        "released_slots": [], "orphans": [], "providers_skipped": [], "providers_unconfigured": [], "st2_unknown": [], "errors": [], "intents": [], "policy_failed": []}
         try:
             api = self._api()
         except St2Unavailable:
@@ -217,6 +218,13 @@ class ReconcilePass(Action):
                 listings[provider] = res["resources"]
             else:
                 self.summary["providers_skipped"].append(provider)
+                if res.get("code") == "provider_unconfigured":
+                    self.summary["providers_unconfigured"].append(provider)
+                    self._incident(f"provider.unconfigured:{provider}", "warning",
+                                   f"{provider} has no API token configured; reconcile skips its tag scan and cannot see or resolve its resources."
+                                   " Set the token (docs/15) and the next pass scans it", [])
+        if len(self.summary["providers_unconfigured"]) == 2:
+            self.summary["noop_reason"] = "providers_unconfigured"
         explained = {r[5] for r in slots.values() if r[3] != "free" and r[5]}
         for key, (_k, gen, provider, state, owner, rid, _sim) in sorted(slots.items()):
             if provider not in listings or owner in keep_ops:

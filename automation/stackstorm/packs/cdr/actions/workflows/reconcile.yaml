@@ -121,6 +121,7 @@ tasks:
         publish:
           - summary: <% result().result %>
           - resumes: <% result().result.resumes %>
+          - noop_reason: <% result().result.get('noop_reason', '') %>
         do: verifying
       - when: <% failed() %>
         publish:
@@ -135,8 +136,26 @@ tasks:
       status: verifying
       message: reconcile pass complete
     next:
-      - when: <% succeeded() %>
+      - when: <% succeeded() and ctx().noop_reason = '' %>
         do: succeed
+      - when: <% succeeded() and ctx().noop_reason != '' %>
+        do: noop_unconfigured
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_unconfigured:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>, observed: <% ctx().summary %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
       - when: <% failed() %>
         publish:
           - error: <% result() %>
