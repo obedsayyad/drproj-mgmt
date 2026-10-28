@@ -45,7 +45,8 @@ class FakeApi:
     def find_live(self, ref, op):
         if self.unavailable:
             raise St2Unavailable("down")
-        return [{"id": f"exec-{op[:8]}", "status": "running"}] if (ref, op) in self.live else []
+        prefix = "heavy" if ref == "cdr.run_heavy" else "exec"
+        return [{"id": f"{prefix}-{op[:8]}", "status": "running"}] if (ref, op) in self.live else []
 
     def execution(self, eid):
         if self.unavailable:
@@ -512,6 +513,7 @@ def test_reconcile_resumes_a_dead_scale_out_that_holds_a_slot_under_the_same_ope
     db.execute("UPDATE ops.operations SET stackstorm_execution_id = 'exec-old' WHERE id = %s::uuid", (op,))
     api = FakeApi()
     api.live[("cdr.scale_out", op)] = True  # the zombie execution is still "running" in st2
+    api.live[("cdr.run_heavy", op)] = True  # and so is its heavy child, which would hold the heavy policy slot for ever
     rec, rgen = new_op(db, "reconcile"), None
     rgen = db.execute("SELECT generation FROM ops.acquire_lease(%s::uuid)", (rec,)).fetchone()
     assert rgen[0] == gen + 1  # takeover: a new fencing generation
@@ -519,7 +521,7 @@ def test_reconcile_resumes_a_dead_scale_out_that_holds_a_slot_under_the_same_ope
     a._api = lambda: api
     ok, out = a.run(rec, rgen[0], op, "relief")
     assert ok and out["resumes"] == [{"ref": "cdr.scale_out", "parameters": {"operation_id": op, "resume": True, "first_attempt": 1, "attempts_done": {}}}]
-    assert api.cancelled == [f"exec-{op[:8]}"]
+    assert api.cancelled == [f"exec-{op[:8]}", f"heavy-{op[:8]}"]  # the workflow and its run_heavy child
     assert db.execute("SELECT status FROM ops.operations WHERE id = %s::uuid", (op,)).fetchone()[0] == "reconciling"
     assert slot(db, key)[0] == "reserved"  # untouched: the resumed run continues in it
     # the fenced worker's next lease-protected call fails

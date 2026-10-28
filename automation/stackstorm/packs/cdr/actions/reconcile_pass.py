@@ -132,6 +132,15 @@ class ReconcilePass(Action):
             self._dead(op, kind, status, execs, api, handled)
         return handled
 
+    def _heavy_children(self, api, op):
+        """Live cdr.run_heavy executions of the dead worker's operation. A SIGKILLed runner leaves its run_heavy `running` for ever, and the heavy
+        policy (action.concurrency.attr, threshold 1) counts scheduled + running, so the resumed run_heavy would be `delayed` behind that ghost (found by the
+        P6.2 restart gate: tests/compose/t10-t22-local.sh). Cancelling moves it to `canceling`, which the policy does not count."""
+        try:
+            return sorted(r["id"] for r in api.find_live("cdr.run_heavy", op))
+        except St2Unavailable:
+            return []
+
     def _live_execs(self, api, kind, op, exec_id):
         if api is None:
             raise St2Unavailable("st2_api_unavailable")
@@ -156,7 +165,7 @@ class ReconcilePass(Action):
             return
         if status in ("running", "waiting", "verifying"):
             self._w_advance(op, "operation.step.completed", "reconcile_takeover", "reconciling", "worker gone; reconcile took over")
-        for eid in execs:
+        for eid in execs + self._heavy_children(api, op):
             try:
                 api.cancel(eid)
             except St2Unavailable:
