@@ -34,23 +34,14 @@
 - name: Issue the leaf certificate
   when: ca_leaf_needed | bool
   block:
-    - name: Generate the leaf key and CSR on the host
-      ansible.builtin.command:
-        argv:
-          - openssl
-          - req
-          - -new
-          - -newkey
-          - ec
-          - -pkeyopt
-          - ec_paramgen_curve:prime256v1
-          - -nodes
-          - -keyout
-          - "{{ ca_leaf_dir }}/app.key.new"
-          - -out
-          - "{{ ca_leaf_dir }}/app.csr"
-          - -subj
-          - "/CN={{ ca_leaf_cn }}"
+    - name: Generate the leaf key and CSR on the host (umask 077: the staged key is 0600)
+      ansible.builtin.shell: |
+        set -eu
+        umask 077
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+          -keyout {{ ca_leaf_dir }}/app.key.new -out {{ ca_leaf_dir }}/app.csr -subj "/CN={{ ca_leaf_cn }}"
+      args:
+        executable: /bin/bash
       changed_when: true
       become: true
 
@@ -130,14 +121,14 @@
         mode: "0644"
       become: true
 
-    - name: Install the key (mode 0644 inside the 0700 directory because the relief and node_exporter containers run as different users)
+    - name: Install the key (0640 root:{{ ca_leaf_key_gid }}, the relief container's group; node_exporter joins it via group_add)
       ansible.builtin.copy:
         src: "{{ ca_leaf_dir }}/app.key.new"
         dest: "{{ ca_leaf_dir }}/app.key"
         remote_src: true
         owner: root
-        group: root
-        mode: "0644"
+        group: "{{ ca_leaf_key_gid }}"
+        mode: "0640"
       become: true
 
     - name: Remove the staged key and CSR
@@ -150,3 +141,12 @@
     - name: Remember that the leaf changed
       ansible.builtin.set_fact:
         ca_leaf_changed: true
+
+- name: Keep an existing leaf key at 0640 root:{{ ca_leaf_key_gid }} (older installs left it 0644)
+  ansible.builtin.file:
+    path: "{{ ca_leaf_dir }}/app.key"
+    owner: root
+    group: "{{ ca_leaf_key_gid }}"
+    mode: "0640"
+  become: true
+  when: ca_leaf_stat.stat.exists and not (ca_leaf_needed | bool) and not ansible_check_mode

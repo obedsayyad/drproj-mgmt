@@ -11,6 +11,8 @@ ca_ca_days: 3650
 ca_leaf_days: 90
 ca_leaf_renew_before_days: 30
 ca_leaf_dir: /etc/drproj/app/certs
+# gid of the `node` user in the relief image (apps/relief/Dockerfile USER node); the leaf key is readable by this group only.
+ca_leaf_key_gid: 1000
 ca_trust_dir: /etc/drproj/trust
 ca_mgmt_host: "{{ groups['management'][0] }}"
 # Which CA signs: the current one, or the new one during the reissue step of a rotation.

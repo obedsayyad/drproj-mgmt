@@ -21,10 +21,14 @@
 - name: Issue the admin leaf
   when: lb_leaf_needed | bool and not ansible_check_mode
   block:
-    - name: Generate key and CSR on the host
-      ansible.builtin.command:
-        argv: [openssl, req, -new, -newkey, ec, -pkeyopt, "ec_paramgen_curve:prime256v1", -nodes,
-               -keyout, "{{ lb_dir }}/certs/lb-admin.key", -out, "{{ lb_dir }}/certs/lb-admin.csr", -subj, "/CN=drproj-lb"]
+    - name: Generate key and CSR on the host (umask 077: the key is 0600 from the moment it exists)
+      ansible.builtin.shell: |
+        set -eu
+        umask 077
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+          -keyout {{ lb_dir }}/certs/lb-admin.key -out {{ lb_dir }}/certs/lb-admin.csr -subj /CN=drproj-lb
+      args:
+        executable: /bin/bash
       changed_when: true
 
     - name: Read the CSR

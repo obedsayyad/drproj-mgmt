@@ -39,6 +39,8 @@ services:
     image: prom/node-exporter:v${NODE_EXPORTER_TAG:-1.12.1}
     mem_limit: 64m
     pid: host
+    # app.key is 0640 root:1000 (the relief image's node group); the exporter's own user (nobody) joins that group to read it.
+    group_add: ["1000"]
     command:
       - --path.rootfs=/host
       - --web.listen-address=0.0.0.0:9100

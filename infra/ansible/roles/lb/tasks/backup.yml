@@ -16,7 +16,7 @@
   ansible.builtin.shell: |
     set -eu
     umask 077
-    tar czf /root/drproj-lb-backup.tgz -C {{ lb_dir }} haproxy certs ca-bundle.crt .env compose.yaml
+    tar czf /root/drproj-lb-backup.tgz -C {{ lb_dir }} haproxy certs .env compose.yaml
     docker exec {{ lb_project }}-acme-1 tar czf - -C /acme.sh . > /root/drproj-lb-acme.tgz
   args:
     executable: /bin/bash

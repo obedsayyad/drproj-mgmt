@@ -100,6 +100,14 @@
   ansible.builtin.import_tasks: certs.yml
   tags: [lb, certs]
 
+- name: Policy check of the installed config (unix-only stats socket; mTLS on every non-public bind; allowed listeners only)
+  ansible.builtin.script:
+    cmd: "check_config.py {{ lb_dir }}/haproxy/haproxy.cfg"
+    executable: python3
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [lb, config, validate]
+
 - name: Check the HAProxy configuration (one-shot container, same files and environment as the service)
   ansible.builtin.command:
     argv:
