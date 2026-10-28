@@ -1,0 +1,4 @@
+# Managed by Ansible (lb role) from rate_limit_exempt_ips: untrusted sources only are rate-limited (docs/08).
+{% for ip in lb_exempt_ips %}
+{{ ip }}
+{% endfor %}

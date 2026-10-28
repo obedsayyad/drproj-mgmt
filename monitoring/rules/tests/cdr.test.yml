@@ -211,16 +211,17 @@ tests:
         alertname: CdrCpuHigh
         exp_alerts: []
 
-  - name: primary unhealthy fires only for a down primary target, after 30 s
+  - name: primary unhealthy follows HAProxy status DOWN after 30 s; MAINT (latched) and UP do not fire
     interval: 5s
     input_series:
-      - series: 'up{instance="p:9100",role="app",job="relief"}'
+      # primary goes DOWN at 15 s. The latched-maint case is a second proxy label set to keep the series apart.
+      - series: 'haproxy_server_status{proxy="be_app",server="primary",state="DOWN"}'
+        values: '0 0 0 1+0x20'
+      - series: 'haproxy_server_status{proxy="be_app",server="primary",state="UP"}'
         values: '1 1 1 0+0x20'
-      - series: 'up{instance="e:9100",role="app",job="relief"}'
+      - series: 'haproxy_server_status{proxy="be_app",server="warm_bk",state="DOWN"}'
         values: '0+0x23'
-      - series: 'cdr_member_serving{instance="p:9100",role="primary"}'
-        values: '1+0x23'
-      - series: 'cdr_member_serving{instance="e:9100",role="elastic"}'
+      - series: 'haproxy_server_status{proxy="other",server="primary",state="MAINT"}'
         values: '1+0x23'
     alert_rule_test:
       - eval_time: 30s
@@ -229,5 +230,26 @@ tests:
       - eval_time: 80s
         alertname: CdrPrimaryUnhealthy
         exp_alerts:
-          - exp_labels: { severity: critical, cdr_event: app.primary.unhealthy, instance: "p:9100", role: primary }
-            exp_annotations: { summary: "Primary p:9100 is not answering" }
+          - exp_labels: { severity: critical, cdr_event: app.primary.unhealthy, proxy: be_app, server: primary, state: DOWN }
+            exp_annotations: { summary: "HAProxy reports the primary DOWN" }
+
+  - name: standby unhealthy fires for a DOWN backup warm line after 30 s; healthy, MAINT and routing-mode lines do not
+    interval: 5s
+    input_series:
+      - series: 'haproxy_server_status{proxy="be_app",server="warm_bk",state="DOWN"}'
+        values: '0 0 0 1+0x20'
+      - series: 'haproxy_server_status{proxy="be_app",server="iwarm_bk",state="DOWN"}'
+        values: '0+0x23'
+      - series: 'haproxy_server_status{proxy="be_app",server="iwarm_bk",state="MAINT"}'
+        values: '1+0x23'
+      - series: 'haproxy_server_status{proxy="be_app",server="warm_act",state="DOWN"}'
+        values: '1+0x23'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: CdrStandbyUnhealthy
+        exp_alerts: []
+      - eval_time: 80s
+        alertname: CdrStandbyUnhealthy
+        exp_alerts:
+          - exp_labels: { severity: warning, cdr_event: standby.unhealthy, proxy: be_app, server: warm_bk, state: DOWN }
+            exp_annotations: { summary: "HAProxy reports the warm standby warm_bk DOWN" }

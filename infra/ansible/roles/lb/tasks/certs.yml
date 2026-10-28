@@ -1,0 +1,113 @@
+---
+# Server leaf for the 8404 (stats, exporter) and 9999 (Runtime API, mTLS) listeners. The key is generated ON this host and never leaves it;
+# only the CSR travels to the management VM, where the CA signs it (same flow as roles/ca/tasks/issue.yml). SAN = the LB's public IP, so the
+# clients (Prometheus, Caddy, the runner) verify by IP against the project CA. The pem is key+certificate+chain for HAProxy, owner uid 99.
+- name: Look for an existing admin leaf
+  ansible.builtin.stat:
+    path: "{{ lb_dir }}/certs/lb-admin.pem"
+  register: lb_leaf_stat
+
+- name: Check how long it remains valid
+  ansible.builtin.command: "openssl x509 -checkend {{ lb_leaf_renew_before_days * 86400 }} -noout -in {{ lb_dir }}/certs/lb-admin.crt"
+  register: lb_leaf_check
+  changed_when: false
+  failed_when: false
+  when: lb_leaf_stat.stat.exists
+
+- name: Decide whether to issue
+  ansible.builtin.set_fact:
+    lb_leaf_needed: "{{ not lb_leaf_stat.stat.exists or (lb_leaf_check.rc | default(1)) != 0 }}"
+
+- name: Issue the admin leaf
+  when: lb_leaf_needed | bool and not ansible_check_mode
+  block:
+    - name: Generate key and CSR on the host
+      ansible.builtin.command:
+        argv: [openssl, req, -new, -newkey, ec, -pkeyopt, "ec_paramgen_curve:prime256v1", -nodes,
+               -keyout, "{{ lb_dir }}/certs/lb-admin.key", -out, "{{ lb_dir }}/certs/lb-admin.csr", -subj, "/CN=drproj-lb"]
+      changed_when: true
+
+    - name: Read the CSR
+      ansible.builtin.slurp:
+        src: "{{ lb_dir }}/certs/lb-admin.csr"
+      register: lb_csr
+
+    - name: Sign on the management VM
+      delegate_to: "{{ lb_mgmt_host }}"
+      become: true
+      block:
+        - name: Work directory
+          ansible.builtin.file:
+            path: "{{ lb_ca_dir }}/work/lb"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+        - name: Stage CSR and extensions
+          ansible.builtin.copy:
+            content: "{{ item.content }}"
+            dest: "{{ lb_ca_dir }}/work/lb/{{ item.name }}"
+            owner: root
+            group: root
+            mode: "0600"
+          loop:
+            - { name: lb.csr, content: "{{ lb_csr.content | b64decode }}" }
+            - name: lb.ext
+              content: |
+                basicConstraints=critical,CA:FALSE
+                keyUsage=critical,digitalSignature
+                extendedKeyUsage=serverAuth
+                subjectAltName=IP:{{ lb_ip }}
+          loop_control:
+            label: "{{ item.name }}"
+        - name: Sign with the CA key
+          ansible.builtin.command:
+            argv: [openssl, x509, -req, -in, "{{ lb_ca_dir }}/work/lb/lb.csr", -CA, "{{ lb_ca_dir }}/ca.crt", -CAkey, "{{ lb_ca_dir }}/ca.key",
+                   -CAcreateserial, -days, "{{ lb_leaf_days }}", -sha256, -extfile, "{{ lb_ca_dir }}/work/lb/lb.ext", -out, "{{ lb_ca_dir }}/work/lb/lb.crt"]
+          changed_when: true
+        - name: Read the signed certificate
+          ansible.builtin.slurp:
+            src: "{{ lb_ca_dir }}/work/lb/lb.crt"
+          register: lb_signed
+        - name: Remove the work directory
+          ansible.builtin.file:
+            path: "{{ lb_ca_dir }}/work/lb"
+            state: absent
+
+    - name: Install the certificate
+      ansible.builtin.copy:
+        content: "{{ lb_signed.content | b64decode }}"
+        dest: "{{ lb_dir }}/certs/lb-admin.crt"
+        owner: "99"
+        group: "99"
+        mode: "0644"
+
+    - name: Build the HAProxy pem (certificate then key) and drop the CSR
+      ansible.builtin.shell: |
+        set -eu
+        umask 077
+        cat {{ lb_dir }}/certs/lb-admin.crt {{ lb_dir }}/certs/lb-admin.key > {{ lb_dir }}/certs/lb-admin.pem.new
+        chown 99:99 {{ lb_dir }}/certs/lb-admin.pem.new {{ lb_dir }}/certs/lb-admin.key
+        chmod 0600 {{ lb_dir }}/certs/lb-admin.pem.new {{ lb_dir }}/certs/lb-admin.key
+        mv {{ lb_dir }}/certs/lb-admin.pem.new {{ lb_dir }}/certs/lb-admin.pem
+        rm -f {{ lb_dir }}/certs/lb-admin.csr
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+- name: Create a self-signed placeholder for app.pem so HAProxy can start before the first ACME issue (never replaces a real one)
+  ansible.builtin.shell: |
+    set -eu
+    umask 077
+    [ -s {{ lb_dir }}/certs/app.pem ] && exit 0
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 7 -subj "/CN={{ lb_app_host }}" \
+      -keyout {{ lb_dir }}/certs/app.key.tmp -out {{ lb_dir }}/certs/app.crt.tmp 2>/dev/null
+    cat {{ lb_dir }}/certs/app.crt.tmp {{ lb_dir }}/certs/app.key.tmp > {{ lb_dir }}/certs/app.pem
+    rm -f {{ lb_dir }}/certs/app.key.tmp {{ lb_dir }}/certs/app.crt.tmp
+    chown 99:99 {{ lb_dir }}/certs/app.pem; chmod 0600 {{ lb_dir }}/certs/app.pem
+    echo created
+  args:
+    executable: /bin/bash
+  register: lb_placeholder
+  changed_when: "'created' in lb_placeholder.stdout"
+  when: not ansible_check_mode

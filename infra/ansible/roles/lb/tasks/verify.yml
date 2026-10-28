@@ -1,0 +1,67 @@
+---
+# Checks from the controller with the project CA bundle; certificate checks stay on wherever the chain is public (production).
+- name: Which issuer does the LB present for the app name?
+  ansible.builtin.shell: >-
+    set -o pipefail; echo | openssl s_client -connect {{ lb_ip }}:443 -servername {{ lb_app_host }} 2>/dev/null | openssl x509 -noout -issuer
+  args:
+    executable: /bin/bash
+  register: lb_issuer
+  changed_when: false
+  delegate_to: localhost
+  become: false
+  when: not ansible_check_mode
+
+- name: The issuer matches the requested ACME environment
+  ansible.builtin.assert:
+    that:
+      - (lb_acme_staging | bool) == ('STAGING' in lb_issuer.stdout)
+      - "'Let' in lb_issuer.stdout"
+    fail_msg: "the LB serves {{ lb_issuer.stdout }}; expected {{ 'a staging' if lb_acme_staging | bool else 'a production' }} Let's Encrypt certificate"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Liveness through the LB (200 with X-Request-ID and the security headers)
+  ansible.builtin.uri:
+    url: "https://{{ lb_app_host }}/health/live"
+    validate_certs: "{{ not (lb_acme_staging | bool) }}"
+    status_code: 200
+    return_content: false
+    timeout: 8
+  register: lb_live
+  retries: "{{ lb_ready_retries }}"
+  delay: "{{ lb_ready_delay }}"
+  until: lb_live.status | default(0) == 200
+  delegate_to: localhost
+  become: false
+  when: not ansible_check_mode
+
+- name: Response headers are present
+  ansible.builtin.assert:
+    that:
+      - lb_live.x_request_id | default('') | length > 0
+      - lb_live.strict_transport_security | default('') | length > 0
+      - lb_live.x_content_type_options | default('') == 'nosniff'
+      - lb_live.referrer_policy | default('') == 'no-referrer'
+      - "'frame-ancestors' in (lb_live.content_security_policy | default(''))"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: The stats listener demands credentials (401 without, 200 with; certificate verified against the project CA)
+  ansible.builtin.uri:
+    url: "https://{{ lb_ip }}:8404/{{ item.path }}"
+    ca_path: "{{ lb_ca_dir }}/{{ lb_ca_bundle_name }}"
+    status_code: "{{ item.code }}"
+    url_username: "{{ item.user | default(omit) }}"
+    url_password: "{{ lb_stats_password if item.user is defined else omit }}"
+    force_basic_auth: "{{ item.user is defined }}"
+    timeout: 8
+  loop:
+    - { path: stats, code: 401 }
+    - { path: metrics, code: 401 }
+    - { path: metrics, code: 200, user: "{{ lb_stats_user }}" }
+  loop_control:
+    label: "{{ item.path }} -> {{ item.code }}"
+  no_log: true
+  delegate_to: localhost
+  become: false
+  when: not ansible_check_mode

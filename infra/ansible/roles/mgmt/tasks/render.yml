@@ -54,7 +54,7 @@
     path: "{{ mgmt_src }}/monitoring/targets/{{ item }}"
     state: directory
     mode: "0755"
-  loop: [relief, node]
+  loop: [relief, node, haproxy, app_cert]
 
 - name: Write the file_sd targets for the fixed primary (relief :9464, node_exporter :9100)
   ansible.builtin.copy:
@@ -65,3 +65,12 @@
   loop:
     - { job: relief, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.app_metrics }}" }
     - { job: node, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.node_exporter }}" }
+
+- name: Write the file_sd targets for the load balancer (HAProxy exporter :8404, public app certificate probe)
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ mgmt_src }}/monitoring/targets/{{ item.job }}/lb.json"
+    mode: "0644"
+  loop:
+    - { job: haproxy, content: '[{"targets": ["{{ mgmt_lb_ip }}:8404"], "labels": {"role": "lb"}}]' }
+    - { job: app_cert, content: '[{"targets": ["https://{{ inputs.ingress.application }}/health/live"], "labels": {"role": "lb"}}]' }

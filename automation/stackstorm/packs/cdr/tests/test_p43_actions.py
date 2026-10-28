@@ -394,6 +394,15 @@ def test_alert_intent_stale_metrics_block_cpu_intents_but_not_the_primary_failur
     assert a.run({"alerts": [alert("app.cpu.low", "l2")]})[1]["intents"][0]["kind"] == "scale_in"
 
 
+def test_alert_intent_haproxy_standby_alert_dispatches_standby_repair_by_label_or_alertname(db, tmp_path):
+    a = intent(tmp_path)
+    out = a.run({"alerts": [alert("standby.unhealthy", "w1")]})[1]["intents"][0]
+    assert out["kind"] == "standby_repair" and out["created"] is True
+    assert a.sent == [("cdr.standby_repair", {"operation_id": out["operation_id"]})]
+    by_name = {"status": "firing", "fingerprint": "w2", "labels": {"alertname": "CdrStandbyUnhealthy", "policy_version": "1"}}
+    assert a.run({"alerts": [by_name]})[1]["intents"][0]["kind"] == "standby_repair"
+
+
 def test_alert_intent_primary_unhealthy_opens_the_incident_and_supersedes_a_queued_scale_in(db, tmp_path):
     a = intent(tmp_path)
     queued = a.run({"alerts": [alert("app.cpu.low", "l1")]})[1]["intents"][0]["operation_id"]

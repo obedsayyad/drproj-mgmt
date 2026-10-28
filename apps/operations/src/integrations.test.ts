@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { probePrometheus } from './integrations.js';
+import { probeHaproxy, probePrometheus } from './integrations.js';
 
 const NOW = Date.parse('2026-10-25T12:00:00Z');
 const BASE = 'http://prometheus.internal:9090';
@@ -59,5 +59,17 @@ describe('probePrometheus', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]![0]).toBe(`${BASE}/api/v1/targets?state=active`);
     expect(calls[0]![1]?.method ?? 'GET').toBe('GET');
+  });
+});
+
+describe('probeHaproxy', () => {
+  it('claims nothing unless the haproxy job is expected', async () => {
+    const r = await probeHaproxy(BASE, ['prometheus', 'ops'], 30, NOW, reply([target('haproxy', 1)]));
+    expect(r).toEqual({ state: 'unavailable', observed_at: null, detail: 'not probed in this phase' });
+  });
+
+  it('is fresh while the haproxy exporter target is up and recent, stale when it is down', async () => {
+    expect(await probeHaproxy(BASE, ['prometheus', 'haproxy'], 30, NOW, reply([target('haproxy', 4)]))).toMatchObject({ state: 'fresh' });
+    expect(await probeHaproxy(BASE, ['haproxy'], 30, NOW, reply([target('haproxy', 4, 'down')]))).toMatchObject({ state: 'stale', detail: 'job haproxy target is down' });
   });
 });

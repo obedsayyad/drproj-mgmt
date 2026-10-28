@@ -1,0 +1,54 @@
+---
+# docs/15 §2: a plain backup of the HAProxy config, the certificate bundle and the ACME account on the management VM (directory 0700,
+# files 0600). Taken after every successful run so a replacement host can be restored without re-issuing (Let's Encrypt limits).
+- name: Create the backup directory on the controller (0700)
+  ansible.builtin.file:
+    path: "{{ lb_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  delegate_to: localhost
+  become: true
+  when: not ansible_check_mode
+
+- name: Archive config, certificates and the ACME account on the host
+  ansible.builtin.shell: |
+    set -eu
+    umask 077
+    tar czf /root/drproj-lb-backup.tgz -C {{ lb_dir }} haproxy certs ca-bundle.crt .env compose.yaml
+    docker exec {{ lb_project }}-acme-1 tar czf - -C /acme.sh . > /root/drproj-lb-acme.tgz
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when: not ansible_check_mode
+
+- name: Fetch both archives
+  ansible.builtin.fetch:
+    src: "/root/{{ item }}"
+    dest: "{{ lb_backup_dir }}/{{ item }}"
+    flat: true
+  loop: [drproj-lb-backup.tgz, drproj-lb-acme.tgz]
+  when: not ansible_check_mode
+
+- name: Tighten the fetched files and remove the staging copies
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: "{{ item.state }}"
+    mode: "{{ item.mode | default(omit) }}"
+    owner: "{{ 'root' if item.state == 'file' else omit }}"
+  loop:
+    - { path: "{{ lb_backup_dir }}/drproj-lb-backup.tgz", state: file, mode: "0600" }
+    - { path: "{{ lb_backup_dir }}/drproj-lb-acme.tgz", state: file, mode: "0600" }
+  delegate_to: localhost
+  become: true
+  loop_control:
+    label: "{{ item.path }}"
+  when: not ansible_check_mode
+
+- name: Remove the archives from the host
+  ansible.builtin.file:
+    path: "/root/{{ item }}"
+    state: absent
+  loop: [drproj-lb-backup.tgz, drproj-lb-acme.tgz]
+  when: not ansible_check_mode

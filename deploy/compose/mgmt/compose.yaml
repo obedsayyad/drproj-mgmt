@@ -41,6 +41,7 @@ services:
       ST2_HOST: ${ST2_HOST:-stackstorm.cproj.obed.one}
       STATS_HOST: ${STATS_HOST:-stats.cproj.obed.one}
       HAPROXY_STATS_UPSTREAM: ${HAPROXY_STATS_UPSTREAM:-}
+      HAPROXY_STATS_CA: ${HAPROXY_STATS_CA:-/etc/ssl/certs/ca-certificates.crt}
       ACME_EMAIL: ${ACME_EMAIL:-}
       ACME_CA: ${ACME_CA:-https://acme-staging-v02.api.letsencrypt.org/directory}
       # bcrypt of OPS_OPERATOR_PASSWORD; single-quote it in .env so `$` is not interpolated.

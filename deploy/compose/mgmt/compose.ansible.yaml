@@ -15,12 +15,16 @@ services:
       - ${MGMT_SECRETS_DIR:-./secrets}/cloud_vm_key:/run/secrets/cloud_vm_key:ro
       - ${BACKEND_CA_BUNDLE_HOST:?set BACKEND_CA_BUNDLE_HOST to the CA bundle file (/etc/drproj/ca/ca-bundle.crt)}:/etc/drproj/ca-bundle.crt:ro
       - runner_ssh:/home/st2/.ssh
+      - ${MGMT_SECRETS_DIR:-./secrets}/runner-client.crt:/run/secrets/haproxy-client.crt:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/runner-client.key:/run/secrets/haproxy-client.key:ro
       - ${SUPABASE_CA_HOST:?set SUPABASE_CA_HOST}:/etc/drproj/supabase-root-2021.crt:ro
     environment:
       # Names only; values come from the management .env (mode 0600). Read by ansible-playbook through AnsibleRunner's allow-list.
       SUPABASE_APP_URL: ${SUPABASE_APP_URL:-}
       DR_AUTOMATION_URL: ${DR_AUTOMATION_URL:-}
       GHCR_READONLY_TOKEN: ${GHCR_READONLY_TOKEN:-}
+      # Runtime API (P6.2 apply_routing): mTLS client certificate issued by the project CA (lb role); names only.
+      HAPROXY_ADMIN_ADDR: ${HAPROXY_ADMIN_ADDR:-}
       NODE_EXPORTER_BASIC_AUTH_PASSWORD: ${NODE_EXPORTER_BASIC_AUTH_PASSWORD:-}
       BACKEND_CA_BUNDLE: /etc/drproj/ca-bundle.crt
       PGSSLROOTCERT: /etc/drproj/supabase-root-2021.crt
@@ -31,6 +35,14 @@ services:
       - ./prometheus/scrape.d:/etc/prometheus/scrape.d:ro
       - ${BACKEND_CA_BUNDLE_HOST:?set BACKEND_CA_BUNDLE_HOST to the CA bundle file (/etc/drproj/ca/ca-bundle.crt)}:/etc/prometheus/ca-bundle.crt:ro
       - ${MGMT_SECRETS_DIR:-./secrets}/node_exporter_scrape_password:/etc/prometheus/node-exporter-password:ro
+      - ${MGMT_SECRETS_DIR:-./secrets}/haproxy_stats_password:/etc/prometheus/haproxy-stats-password:ro
+
+  # HAProxy stats page behind stats.<domain>: verify the LB's backend-CA leaf (SAN = LB IP).
+  caddy:
+    volumes:
+      - ${BACKEND_CA_BUNDLE_HOST:?set BACKEND_CA_BUNDLE_HOST}:/etc/caddy/ca-bundle.crt:ro
+    environment:
+      HAPROXY_STATS_CA: /etc/caddy/ca-bundle.crt
 
 volumes:
   runner_ssh: {}

@@ -16,11 +16,13 @@
 	reverse_proxy st2web:80
 }
 
-# HAProxy admin stats live on the LB VM (P6). Unset upstream resolves to nothing and answers 502.
+# HAProxy stats live on the LB VM (8404, TLS, `stats auth`: Caddy forwards the client's credentials, it holds none). Unset upstream
+# resolves to nothing and answers 502. The leaf is issued by the project CA (HAPROXY_STATS_CA, set by compose.ansible.yaml).
 (stats_site) {
 	reverse_proxy {$HAPROXY_STATS_UPSTREAM:haproxy-stats.invalid:8404} {
 		transport http {
 			tls
+			tls_trust_pool file {$HAPROXY_STATS_CA:/etc/ssl/certs/ca-certificates.crt}
 		}
 	}
 }

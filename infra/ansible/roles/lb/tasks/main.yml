@@ -1,5 +1,170 @@
 ---
-- name: Fail because the lb role is not implemented yet (P6)
-  ansible.builtin.fail:
-    msg: "not_implemented: the lb role lands in P6 (docs/11)"
-  tags: [lb, not_implemented]
+# Load balancer bring-up (docs/08, docs/15 §2). Run from the management VM: ansible-playbook playbooks/lb.yml --check --diff, then for real.
+# Order: inputs -> files -> backend CA material -> validate config -> compose up -> ACME issue/renew wiring -> verify -> backup.
+- name: Check the inputs this role needs
+  ansible.builtin.assert:
+    that:
+      - lb_ip | length > 0
+      - inputs.hosts.primary.public_ip | length > 0
+      - lb_acme_email | length > 0
+      - inputs.versions.haproxy | length > 0 and inputs.versions.acme_sh | length > 0
+    fail_msg: "hosts.load_balancer/primary public IPs, ingress.acme_email and versions.haproxy/acme_sh must be set in the deployment inputs"
+    quiet: true
+  tags: [lb, always]
+
+- name: Read the HAProxy stats password on the controller (created on first use; never printed)
+  ansible.builtin.set_fact:
+    lb_stats_password: "{{ lookup('ansible.builtin.password', lb_stats_password_file ~ ' length=32 chars=ascii_letters,digits') }}"
+  no_log: true
+  delegate_to: localhost
+  run_once: true
+  tags: [lb, config]
+
+- name: Create the stack directories (owner-only)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.owner | default('root') }}"
+    mode: "{{ item.mode | default('0700') }}"
+  loop:
+    - { path: "{{ lb_dir }}" }
+    # No secrets here (credentials come from .env): the haproxy user (uid 99) must read the bind-mounted errors/ directory.
+    - { path: "{{ lb_dir }}/haproxy", mode: "0755" }
+    - { path: "{{ lb_dir }}/haproxy/errors", mode: "0755" }
+    - { path: "{{ lb_dir }}/certs", owner: "99" }
+    - { path: "{{ lb_dir }}/state", owner: "99" }
+    # Admin socket directory shared with the acme container (root): HAProxy (uid 99) creates admin.sock here.
+    - { path: "{{ lb_dir }}/run", owner: "99", mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [lb, config]
+
+- name: Install the vendored Compose project and HAProxy files
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ lb_dir }}/{{ item.src }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - { src: compose.yaml }
+    - { src: haproxy/haproxy.cfg }
+    - { src: haproxy/errors/503.http }
+  loop_control:
+    label: "{{ item.src }}"
+  register: lb_files
+  tags: [lb, config]
+
+- name: Render the exempt-IP list (rate_limit_exempt_ips)
+  ansible.builtin.template:
+    src: trusted_test_ips.lst.j2
+    dest: "{{ lb_dir }}/haproxy/trusted_test_ips.lst"
+    owner: root
+    group: root
+    mode: "0644"
+  register: lb_lst
+  tags: [lb, config]
+
+- name: Render the environment file (mode 0600; holds the stats password)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ lb_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  register: lb_env
+  tags: [lb, config]
+
+- name: Place the backend CA bundle (public certificates) from the management VM
+  ansible.builtin.slurp:
+    src: "{{ lb_ca_dir }}/{{ lb_ca_bundle_name }}"
+  register: lb_ca
+  delegate_to: "{{ lb_mgmt_host }}"
+  become: true
+  tags: [lb, certs]
+
+- name: Install the CA bundle
+  ansible.builtin.copy:
+    content: "{{ lb_ca.content | b64decode }}"
+    dest: "{{ lb_dir }}/haproxy/{{ lb_ca_bundle_name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: lb_ca_installed
+  tags: [lb, certs]
+
+- name: Backend-CA leaf for the stats and Runtime API listeners
+  ansible.builtin.import_tasks: certs.yml
+  tags: [lb, certs]
+
+- name: Check the HAProxy configuration (one-shot container, same files and environment as the service)
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --add-host
+      - "acme:127.0.0.1"
+      - --env-file
+      - "{{ lb_dir }}/.env"
+      - -v
+      - "{{ lb_dir }}/haproxy:/usr/local/etc/haproxy/conf:ro"
+      - -v
+      - "{{ lb_dir }}/certs:/usr/local/etc/haproxy/certs:ro"
+      - "haproxy:{{ inputs.versions.haproxy }}-alpine"
+      - haproxy
+      - -c
+      - -f
+      - /usr/local/etc/haproxy/conf/haproxy.cfg
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [lb, config, validate]
+
+- name: Keep the applied server state before any recreate (docs/08, dump before reload)
+  ansible.builtin.shell: |
+    set -eu
+    if docker exec {{ lb_project }}-haproxy-1 true 2>/dev/null && docker exec {{ lb_project }}-acme-1 true 2>/dev/null; then
+      docker exec {{ lb_project }}-acme-1 sh -c 'echo "show servers state" | socat stdio UNIX-CONNECT:/var/run/haproxy/admin.sock' > {{ lb_dir }}/state/server-state.new &&
+      chown 99:99 {{ lb_dir }}/state/server-state.new && mv {{ lb_dir }}/state/server-state.new {{ lb_dir }}/state/server-state
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: not ansible_check_mode and (lb_files.changed or lb_env.changed or lb_lst.changed or lb_ca_installed.changed)
+  tags: [lb, deploy]
+
+- name: Start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ lb_dir }}"
+    project_name: "{{ lb_project }}"
+    state: present
+    pull: missing
+    recreate: auto
+    wait: true
+    wait_timeout: 120
+  become: true
+  register: lb_compose
+  when: not ansible_check_mode
+  tags: [lb, deploy]
+
+- name: Reload HAProxy gracefully when its files changed (master-worker SIGUSR2; the config was validated above and the state dumped)
+  ansible.builtin.command: "docker kill --signal=USR2 {{ lb_project }}-haproxy-1"
+  when: >-
+    not ansible_check_mode and (lb_files.changed or lb_lst.changed or lb_ca_installed.changed or lb_env.changed)
+    and not (lb_compose.changed | default(false))
+  changed_when: true
+  tags: [lb, deploy]
+
+- name: ACME issue, deploy hook and renewal
+  ansible.builtin.import_tasks: acme.yml
+  tags: [lb, acme]
+
+- name: Verify from the controller
+  ansible.builtin.import_tasks: verify.yml
+  tags: [lb, verify]
+
+- name: Back up the config, certificates and ACME account to the management VM
+  ansible.builtin.import_tasks: backup.yml
+  tags: [lb, backup]

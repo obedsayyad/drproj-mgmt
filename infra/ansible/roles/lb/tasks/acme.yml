@@ -1,0 +1,41 @@
+---
+# Standalone HTTP-01 on 8888 (HAProxy fe_http sends /.well-known/acme-challenge/ to the acme container); the `haproxy` deploy hook hot-updates
+# the pem through the shared admin socket and chowns it for uid 99 (compose env DEPLOY_HAPROXY_*). The hook settings are stored with the
+# domain, so the container's daily cron renews and redeploys without a restart. Staging first; production is a deliberate second run
+# (-e lb_acme_staging=false), which force-reissues once. Let's Encrypt limits duplicate certificates: do not flip back and forth.
+# Judge by the issuer of the certificate acme.sh actually holds, not by its config: a failed attempt already rewrites the stored CA.
+- name: Read the issuer of the certificate acme.sh holds
+  ansible.builtin.command: "docker exec {{ lb_project }}-acme-1 sh -c 'openssl x509 -in /acme.sh/{{ lb_app_host }}_ecc/{{ lb_app_host }}.cer -noout -issuer'"
+  register: lb_acme_info
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Decide whether to issue
+  ansible.builtin.set_fact:
+    lb_acme_issued: "{{ (lb_acme_info.rc | default(1)) == 0 and 'issuer' in lb_acme_info.stdout }}"
+    lb_acme_current_staging: "{{ 'STAGING' in (lb_acme_info.stdout | default('')) }}"
+  when: not ansible_check_mode
+
+- name: Issue (or switch issuer) and deploy
+  when: not ansible_check_mode and (not (lb_acme_issued | bool) or (lb_acme_current_staging | bool) != (lb_acme_staging | bool))
+  block:
+    - name: Issue over standalone HTTP-01
+      ansible.builtin.command:
+        argv: >-
+          {{ ['docker', 'exec', lb_project ~ '-acme-1', 'acme.sh', '--issue', '--standalone', '--httpport', lb_acme_http_port | string,
+              '-d', lb_app_host, '--server', lb_acme_server, '--accountemail', lb_acme_email, '--keylength', 'ec-256']
+             + (['--force'] if (lb_acme_issued | bool) else []) }}
+      register: lb_acme_issue
+      changed_when: true
+
+    - name: Deploy through the haproxy hook (hot update, no restart)
+      ansible.builtin.command: "docker exec {{ lb_project }}-acme-1 acme.sh --deploy --ecc -d {{ lb_app_host }} --deploy-hook haproxy"
+      changed_when: true
+
+- name: Confirm the daily renewal job is installed in the container
+  ansible.builtin.command: "docker exec {{ lb_project }}-acme-1 sh -c 'crontab -l | grep -c acme.sh'"
+  register: lb_acme_cron
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode

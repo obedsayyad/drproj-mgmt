@@ -1,5 +1,8 @@
 ---
-# Scaffold (P6): the role reports not_implemented until then.
+# Load balancer bring-up (docs/15 §2). Run on the management VM:
+#   ansible-playbook playbooks/lb.yml --check --diff --limit lb-vm        # then without --check
+# ACME: staging by default (ingress.acme_staging); after verifying, run once with -e lb_acme_staging=false for production.
+# The role fetches the backend CA bundle itself, so no other host is touched.
 - name: Configure the lb host
   hosts: lb
   become: true

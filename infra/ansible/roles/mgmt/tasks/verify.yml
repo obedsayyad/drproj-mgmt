@@ -18,11 +18,13 @@
       - mgmt_overview.json.integrations.supabase.state == 'fresh'
       - mgmt_overview.json.integrations.stackstorm.state == 'fresh'
       - mgmt_overview.json.integrations.prometheus.state == 'fresh'
-      - mgmt_overview.json.integrations.providers.state == 'unavailable'
+      # No provider tokens exist: a recorded failed/old reconcile is stale or unavailable, never fresh.
+      - mgmt_overview.json.integrations.providers.state in ['unavailable', 'stale']
+      # The haproxy probe judges the `haproxy` Prometheus job (P6.1): fresh once the ops image carrying the probe is deployed, otherwise "not probed".
+      - mgmt_overview.json.integrations.haproxy.state in ['fresh', 'unavailable']
     fail_msg: "unexpected integration states: {{ mgmt_overview.json.integrations | to_json }}"
     quiet: true
   when: not ansible_check_mode
-  # haproxy is "not probed in this phase" (state unavailable) and is checked by hand; it is not part of this gate.
 
 - name: Report
   ansible.builtin.set_stats:

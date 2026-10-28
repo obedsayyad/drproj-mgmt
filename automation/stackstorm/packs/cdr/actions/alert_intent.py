@@ -6,6 +6,7 @@ policy version, via ops.open_operation) that is dispatched to its workflow once.
   app.cpu.high           activate_standby while an idle warm standby is ready and activate_warm_standby_first is on, else scale_out
   app.cpu.low            scale_in
   app.primary.unhealthy  opens the primary.unhealthy:relief incident, supersedes queued scale-ins, primary_failure
+  standby.unhealthy      standby_repair (HAProxy reports a warm line DOWN, P6.1); standby_classify decides the repair under the lock
 Cooldown and every other recheck happen under the lock in the workflow, not here.
 """
 from cdr_common import advance
@@ -18,12 +19,13 @@ EVENT_BY_ALERT = {
     "CdrCpuHigh": "app.cpu.high",
     "CdrCpuLow": "app.cpu.low",
     "CdrPrimaryUnhealthy": "app.primary.unhealthy",
+    "CdrStandbyUnhealthy": "standby.unhealthy",
     "CdrServingMemberStale": "metrics.stale",
     "CdrServingMemberMissing": "metrics.stale",
     "CdrServingTargetDown": "metrics.stale",
     "CdrMembershipAbsent": "metrics.stale",
 }
-INTENT_KIND = {"app.cpu.low": "scale_in", "app.primary.unhealthy": "primary_failure"}
+INTENT_KIND = {"app.cpu.low": "scale_in", "app.primary.unhealthy": "primary_failure", "standby.unhealthy": "standby_repair"}
 CPU_EVENTS = ("app.cpu.high", "app.cpu.low")
 
 

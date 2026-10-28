@@ -1,3 +1,26 @@
 ---
-# Placeholder so defaults/ exists; the lb role is a scaffold until P6.
-lb_phase: "P6"
+# Load balancer host (docs/08, docs/15 §2): HAProxy + acme.sh by Compose. Files under files/ are vendored copies of
+# drproj-app/deploy/compose/lb (the source of truth; tests/test_lb_parity.py keeps them identical, like the app role).
+lb_dir: /opt/drproj/lb
+lb_project: drproj-lb
+lb_ip: "{{ inputs.hosts.load_balancer.public_ip }}"
+lb_app_host: "{{ inputs.ingress.application }}"
+lb_primary_addr: "{{ inputs.hosts.primary.public_ip }}:{{ inputs.ports.app_https }}"
+lb_stats_user: prometheus
+# Created by the mgmt role (or here on first use); the same file feeds the Prometheus job. Read on the controller (the management VM).
+lb_stats_password_file: /etc/drproj/mgmt/secrets/haproxy_stats_password
+lb_mgmt_host: "{{ groups['management'][0] }}"
+lb_ca_dir: /etc/drproj/ca
+lb_ca_bundle_name: ca-bundle.crt
+lb_leaf_days: 90
+lb_leaf_renew_before_days: 30
+# acme.sh: staging first (ingress.acme_staging true), then production once DNS and the staging run are verified (override: -e lb_acme_staging=false).
+lb_acme_staging: "{{ inputs.ingress.acme_staging | default(true) | bool }}"
+lb_acme_email: "{{ inputs.ingress.acme_email | default('', true) }}"
+lb_acme_server: "{{ 'letsencrypt_test' if lb_acme_staging | bool else 'letsencrypt' }}"
+lb_acme_http_port: 8888
+lb_exempt_ips: "{{ inputs.rate_limit_exempt_ips | default([]) }}"
+# Config/cert/account backup on the management VM (docs/15 §2): directory 0700, files 0600.
+lb_backup_dir: "{{ inputs.backup.dir | default('/var/backups/drproj') }}/lb"
+lb_ready_retries: 30
+lb_ready_delay: 4

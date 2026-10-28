@@ -78,6 +78,12 @@ export async function probePrometheus(
   return { state: 'stale', observed_at, detail: [...new Set(problems)].slice(0, 5).join('; ') };
 }
 
+/** HAProxy health is the freshness of its exporter scrape; without an expected `haproxy` job nothing is claimed. */
+export function probeHaproxy(prometheusUrl: string | null, expectedJobs: string[], staleAfterSeconds: number, nowMs: number = Date.now(), fetchImpl: typeof fetch = fetch): Promise<IntegrationStatus> {
+  if (!prometheusUrl || !expectedJobs.includes('haproxy')) return Promise.resolve(notProbed);
+  return probePrometheus(prometheusUrl, ['haproxy'], staleAfterSeconds, nowMs, fetchImpl);
+}
+
 const notConfigured = (what: string): IntegrationStatus => ({ state: 'unavailable', observed_at: null, detail: `${what} is not configured` });
 
 /**
@@ -91,9 +97,10 @@ export async function observeIntegrations(cfg: Config, pool: pg.Pool, reconcileI
     .catch((): IntegrationStatus => ({ state: 'unavailable', observed_at: null, detail: 'query failed' }));
   const stackstorm = cfg.stackstorm ? probe(`${cfg.stackstorm.url}/v1/actions?limit=1`, { 'St2-Api-Key': cfg.stackstorm.apiKey }) : Promise.resolve(notConfigured('StackStorm'));
   // Prometheus readiness alone says nothing about metric freshness, so its target table is judged (P3.2).
-  // An HTTP 200 from the HAProxy stats page says nothing about backend freshness: not probed until P6.
+  // An HTTP 200 from the HAProxy stats page says nothing about backend freshness, so the exporter scrape is judged instead (P6.1):
+  // fresh only while the `haproxy` job's target is up and was scraped recently. Not probed when the job is not expected.
   const prometheus = cfg.prometheusUrl ? probePrometheus(cfg.prometheusUrl, cfg.prometheusExpectedJobs, staleAfterSeconds) : Promise.resolve(notConfigured('Prometheus'));
-  const haproxy = Promise.resolve(notProbed);
+  const haproxy = probeHaproxy(cfg.prometheusUrl, cfg.prometheusExpectedJobs, staleAfterSeconds);
   const providers = pool
     .query<{ at: string | null; age: number | null; simulated: number }>(
       // Simulation-adapter runs (ops.operations.adapter_mode, docs/10) never make providers look observed.

@@ -1,7 +1,7 @@
 ---
 galaxy_info:
   author: drproj
-  description: HAProxy load balancer host (scaffold until P6)
+  description: HAProxy load balancer host (HAProxy, acme.sh, backend CA material, runbook backups)
   license: MIT
   min_ansible_version: "2.17"
   role_name: lb
@@ -11,5 +11,5 @@ galaxy_info:
       versions: [all]
     - name: Ubuntu
       versions: [all]
-  galaxy_tags: [haproxy, scaffold]
+  galaxy_tags: [haproxy, acme]
 dependencies: []

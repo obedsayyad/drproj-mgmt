@@ -1,0 +1,66 @@
+---
+# mTLS client certificate for the StackStorm runner's HAProxy Runtime API calls (P6.1; the P6.2 apply_routing adapter consumes it). The
+# CA lives on this host, so key, CSR and signature stay here; the key never leaves mgmt_secrets_dir (0600, st2 owner after perms.yml).
+- name: Look for an existing runner client certificate
+  ansible.builtin.stat:
+    path: "{{ mgmt_secrets_dir }}/runner-client.crt"
+  register: mgmt_rc_stat
+
+- name: Check how long it remains valid
+  ansible.builtin.command: "openssl x509 -checkend {{ mgmt_runner_client_renew_days * 86400 }} -noout -in {{ mgmt_secrets_dir }}/runner-client.crt"
+  register: mgmt_rc_check
+  changed_when: false
+  failed_when: false
+  when: mgmt_rc_stat.stat.exists
+
+- name: Issue the runner client certificate
+  when: not ansible_check_mode and (not mgmt_rc_stat.stat.exists or (mgmt_rc_check.rc | default(1)) != 0)
+  block:
+    - name: Create a private work directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: runner-client
+      register: mgmt_rc_work
+
+    - name: Write the extensions
+      ansible.builtin.copy:
+        content: |
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature
+          extendedKeyUsage=clientAuth
+        dest: "{{ mgmt_rc_work.path }}/client.ext"
+        mode: "0600"
+
+    - name: Generate the key and CSR
+      ansible.builtin.command:
+        argv: [openssl, req, -new, -newkey, "ec", -pkeyopt, "ec_paramgen_curve:prime256v1", -nodes,
+               -keyout, "{{ mgmt_rc_work.path }}/client.key", -out, "{{ mgmt_rc_work.path }}/client.csr", -subj, "/CN=drproj-runner"]
+      changed_when: true
+
+    - name: Sign with the CA key
+      ansible.builtin.command:
+        argv: [openssl, x509, -req, -in, "{{ mgmt_rc_work.path }}/client.csr", -CA, "{{ mgmt_ca_dir }}/ca.crt", -CAkey, "{{ mgmt_ca_dir }}/ca.key",
+               -CAcreateserial, -days, "{{ mgmt_runner_client_days }}", -sha256, -extfile, "{{ mgmt_rc_work.path }}/client.ext",
+               -out, "{{ mgmt_rc_work.path }}/client.crt"]
+      changed_when: true
+
+    - name: Install key and certificate (0600)
+      ansible.builtin.copy:
+        src: "{{ mgmt_rc_work.path }}/{{ item.src }}"
+        dest: "{{ mgmt_secrets_dir }}/{{ item.dest }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      loop:
+        - { src: client.key, dest: runner-client.key }
+        - { src: client.crt, dest: runner-client.crt }
+      loop_control:
+        label: "{{ item.dest }}"
+
+  always:
+    - name: Remove the work directory
+      ansible.builtin.file:
+        path: "{{ mgmt_rc_work.path }}"
+        state: absent
+      when: mgmt_rc_work.path is defined

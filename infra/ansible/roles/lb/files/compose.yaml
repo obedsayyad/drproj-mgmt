@@ -1,0 +1,55 @@
+# Load-balancer VM stack (docs/08): HAProxy + acme.sh. The lb Ansible role renders .env (PRIMARY_ADDR, APP_HOST, stats
+# credentials), places certs/ run/ state/ and haproxy/{ca-bundle.crt,trusted_test_ips.lst} next to this file and validates the config before `up`.
+# mem_limit values are INITIAL ceilings for the 1 vCPU / 1 GB VM.
+name: drproj-lb
+
+services:
+  haproxy:
+    restart: unless-stopped
+    image: haproxy:${HAPROXY_TAG:-3.2.26-alpine}
+    mem_limit: 256m
+    ports: ["80:80", "443:443", "8404:8404", "9999:9999"]
+    env_file: [.env]
+    command: ["haproxy", "-f", "/usr/local/etc/haproxy/conf/haproxy.cfg"]
+    volumes:
+      # haproxy.cfg, errors/, trusted_test_ips.lst, ca-bundle.crt (no secrets; mode 0755 so uid 99 can read it)
+      - ./haproxy:/usr/local/etc/haproxy/conf:ro
+      - ./certs:/usr/local/etc/haproxy/certs
+      - ./state:/var/lib/haproxy
+      - ./run:/var/run/haproxy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  acme:
+    restart: unless-stopped
+    image: neilpang/acme.sh:${ACME_SH_TAG:-3.1.6}
+    mem_limit: 64m
+    command: daemon
+    environment:
+      # Issue/renew over standalone :8888 (HAProxy routes /.well-known/acme-challenge/ here); the haproxy deploy hook
+      # hot-updates the pem through the shared admin socket, so renewal needs no restart.
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_STAGING: ${ACME_STAGING:-true}
+      # Same path as in the haproxy container: `set ssl cert` over the socket names the file HAProxy loaded at start.
+      DEPLOY_HAPROXY_PEM_PATH: /usr/local/etc/haproxy/certs
+      # HAProxy runs as uid 99; acme.sh writes as root. Runs after each deploy (also covers a later HAProxy restart).
+      DEPLOY_HAPROXY_RELOAD: "chown 99:99 /usr/local/etc/haproxy/certs/app.pem && chmod 0600 /usr/local/etc/haproxy/certs/app.pem"
+      DEPLOY_HAPROXY_PEM_NAME: app.pem
+      DEPLOY_HAPROXY_HOT_UPDATE: "yes"
+      DEPLOY_HAPROXY_STATS_SOCKET: UNIX:/var/run/haproxy/admin.sock
+    volumes:
+      - lb_acme:/acme.sh
+      - ./certs:/usr/local/etc/haproxy/certs
+      - ./run:/var/run/haproxy
+    healthcheck:
+      test: ["CMD", "acme.sh", "--version"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  lb_acme: {}

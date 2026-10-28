@@ -59,18 +59,26 @@ groups:
         labels: { severity: info, cdr_event: app.cpu.low }
         annotations:
           summary: "Serving fleet CPU is below 20% for 120 s"
-      # P4: the primary's relief scrape target. HAProxy health (3 failed checks) replaces it as the signal in P6.
+      # P6.1: HAProxy's own view of the primary (3 failed /health/live checks, ~30 s). A server in MAINT (latched after failover, or
+      # during failback) is state MAINT, not DOWN, so a latched primary does not re-fire; failback is driven by StackStorm.
       - alert: CdrPrimaryUnhealthy
-        expr: |
-          (cdr_member_serving{role="primary"} == 1) unless on(instance) (min by (instance) (up{job="relief"}) == 1)
+        expr: haproxy_server_status{proxy="be_app",server="primary",state="DOWN"} == 1
         for: 30s
         labels: { severity: critical, cdr_event: app.primary.unhealthy }
         annotations:
-          summary: "Primary {{ $labels.instance }} is not answering"
+          summary: "HAProxy reports the primary DOWN"
+      # P6.1: the warm standby lines (docs/08 dual-line warm, interim warm). A DISABLED line (no standby bound) or a MAINT line is state
+      # MAINT/no series and never matches DOWN. warm_act is a routing-mode line (maint in normal mode), so only the backup lines count.
+      - alert: CdrStandbyUnhealthy
+        expr: haproxy_server_status{proxy="be_app",server=~"warm_bk|iwarm_bk",state="DOWN"} == 1
+        for: 30s
+        labels: { severity: warning, cdr_event: standby.unhealthy }
+        annotations:
+          summary: "HAProxy reports the warm standby {{ $labels.server }} DOWN"
 
   - name: cdr-dependencies
     rules:
-      # No blackbox targets exist yet (P5/P6); the rule is in place so the first probe is covered.
+      # Blackbox probes the public app certificate through the LB (P6.1); other backend certificates join as probes are added.
       - alert: CdrBackendCertExpiringSoon
         expr: probe_ssl_earliest_cert_expiry - time() < 14 * 86400
         labels: { severity: warning }
