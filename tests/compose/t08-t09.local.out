@@ -1,7 +1,7 @@
 T08/T09 LOCAL SIMULATION RUN - Docker Desktop on a developer Mac (arm64), NOT the management VM, no cloud resources
 provider adapter: simulation (flock'd JSON on the st2 volume); every instance row must carry simulated=true
 StackStorm images run as linux/amd64 (emulated on arm64); timings are NOT representative of the 2 vCPU / 4 GB VM
-date: 2026-10-27T19:55:29Z
+date: 2026-10-28T19:49:47Z
 --- 1. Postgres, migrations through ops/0013, test policy
 PASS localpg healthy
       app/0001_app_schema.sql
@@ -38,7 +38,7 @@ PASS policies registered (cdr.capacity_guard.activate_standby,cdr.capacity_guard
 PASS actions/lib imports on live st2 (cdr.adapter_info -> status adapter simulated) (succeeded simulation True)
 --- 4. T08: provider never ready on both providers (policy checkpoints 30/45/60 s)
 PASS no live lease and no non-terminal operation before T08 (0 0)
-PASS operation opened by cdr.open_operation (5fb03a9f-a78d-4fb3-b16a-1a59addf5083)
+PASS operation opened by cdr.open_operation (742c02fa-077f-499f-b1b6-38c967f31ed4)
 PASS op captured the active policy version (1)
 PASS scale_out execution finished (succeeded)
 PASS capacity_guard did not delay T08
@@ -82,7 +82,7 @@ PASS lease released after the stop (free)
 PASS T09 events validate against events.schema.json (ok)
 --- 5b. T09b: the database stops answering for 25 s while scale_out holds the lease (fault injection)
 PASS no live lease and no non-terminal operation before T09b (0 0)
-PASS scale_out took the lease before the blip (943b7dd4-bb76-4442-ae83-b57c9f109090)
+PASS scale_out took the lease before the blip (49d02f9a-bf6e-4172-95a1-3e2404b5009d)
     localpg paused
     localpg resumed
 PASS no stranded lease after the database came back (free)
