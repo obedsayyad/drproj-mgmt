@@ -110,7 +110,8 @@
   when: not ansible_check_mode
   changed_when: true
 
-# Grafana stores the admin password in its DB after first start; GF_SECURITY_ADMIN_PASSWORD__FILE does not update it later. Reset only when the file value is rejected.
+# Grafana stores the admin password in its DB after first start; GF_SECURITY_ADMIN_PASSWORD__FILE does not update it later.
+# Reset only when the file value is rejected.
 - name: Check the Grafana admin login with the file value
   ansible.builtin.uri:
     url: "https://{{ inputs.ingress.grafana }}/api/org"
