@@ -109,3 +109,31 @@
     argv: ["{{ mgmt_st2_script }}", rule, disable, cdr.reconcile_every_60s]
   when: not ansible_check_mode
   changed_when: true
+
+# Grafana stores the admin password in its DB after first start; GF_SECURITY_ADMIN_PASSWORD__FILE does not update it later. Reset only when the file value is rejected.
+- name: Check the Grafana admin login with the file value
+  ansible.builtin.uri:
+    url: "https://{{ inputs.ingress.grafana }}/api/org"
+    url_username: admin
+    url_password: "{{ mgmt_grafana_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ not mgmt_acme_staging | bool }}"
+    status_code: [200, 401]
+    timeout: 10
+  register: mgmt_grafana_login
+  no_log: true
+  changed_when: false
+  retries: "{{ mgmt_ready_retries }}"
+  delay: "{{ mgmt_ready_delay }}"
+  until: mgmt_grafana_login.status is defined
+  when: not ansible_check_mode
+
+- name: Reset the Grafana admin password to the file value (only after a rejected login)
+  ansible.builtin.shell: >-
+    {{ mgmt_compose }} exec -T grafana
+    grafana cli admin reset-admin-password "$(cat {{ mgmt_secrets_dir }}/grafana_admin_password)"
+  args:
+    chdir: "{{ mgmt_compose_dir }}"
+  no_log: true
+  changed_when: true
+  when: not ansible_check_mode and mgmt_grafana_login.status == 401
