@@ -121,7 +121,7 @@
         mode: "0644"
       become: true
 
-    - name: Install the key (0640 root:{{ ca_leaf_key_gid }}, the relief container's group; node_exporter joins it via group_add)
+    - name: Install the key (0640, group of the relief container; node_exporter joins it via group_add)
       ansible.builtin.copy:
         src: "{{ ca_leaf_dir }}/app.key.new"
         dest: "{{ ca_leaf_dir }}/app.key"
@@ -142,7 +142,7 @@
       ansible.builtin.set_fact:
         ca_leaf_changed: true
 
-- name: Keep an existing leaf key at 0640 root:{{ ca_leaf_key_gid }} (older installs left it 0644)
+- name: Keep an existing leaf key at 0640 with the relief group (older installs left it 0644)
   ansible.builtin.file:
     path: "{{ ca_leaf_dir }}/app.key"
     owner: root
