@@ -24,7 +24,7 @@ from .base import AdapterConfigError, ProviderAdapter, tags_for
 from .ansible_runner import AnsibleRunner
 from .http_api import DigitalOceanHttp, LinodeHttp
 from .tf_runner import TfRunner, required
-from haproxy_admin import AdminClient, AdminError, MembershipStore
+from haproxy_admin import AdminClient, AdminError, LbStatePush, MembershipStore
 from haproxy_routing import Router, lines_for_slot, plan_mode, plan_primary, plan_slot
 
 PROVIDERS = ("digitalocean", "linode")
@@ -36,7 +36,7 @@ class RealAdapter(ProviderAdapter):
     simulated = False
     mode = "real"
 
-    def __init__(self, cfg, http=None, runner=None, ansible=None, ops_url=None, admin=None, store=None):
+    def __init__(self, cfg, http=None, runner=None, ansible=None, ops_url=None, admin=None, store=None, push=None):
         self.cfg = cfg
         required(cfg, "tf_slot_script")
         required(cfg, "tf_state_dir")
@@ -51,6 +51,8 @@ class RealAdapter(ProviderAdapter):
         self.admin = admin or (AdminClient(hp["admin_addr"], hp["client_cert"], hp["client_key"], hp["ca_bundle"]) if hp else None)
         self.store = store or (MembershipStore(hp["state_dir"]) if hp else None)
         self.ca_bundle = (hp or {}).get("ca_bundle")
+        ls = (hp or {}).get("lb_ssh")
+        self.push = push or (LbStatePush(ls["host"], ls["user"], ls["key"], ls.get("known_hosts")) if ls else None)
         self._fence = self._audit = None
 
     # ---- HTTP side
@@ -164,7 +166,7 @@ class RealAdapter(ProviderAdapter):
             raise AdapterConfigError("real_adapter_config_missing")
         if self._fence is None or self._audit is None:
             raise AdapterConfigError("routing_not_bound")
-        return Router(self.admin, self.store, self._fence, self._audit)
+        return Router(self.admin, self.store, self._fence, self._audit, self.push)
 
     def membership(self):
         if self.admin is None:

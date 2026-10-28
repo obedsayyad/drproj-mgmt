@@ -44,7 +44,7 @@ class Guard(AdminClient):
         return self.inner.set_cmd(cmd)
 
 
-def run(client, store, fence, audit, count_audit):
+def run(client, store, fence, audit, count_audit, push=None):
     """-> (ok, report dict). count_audit() returns the number of haproxy.command audit rows of this operation."""
     report, ok = {"checks": {}}, True
 
@@ -61,7 +61,7 @@ def run(client, store, fence, audit, count_audit):
     except AdminError as exc:
         check("show_servers_conn_parses", False, str(exc))
     guard = Guard(client, m.get("primary").weight)
-    router = Router(guard, store, fence, audit)
+    router = Router(guard, store, fence, audit, push)
     start_dumps = len(os.listdir(store.dir)) if os.path.isdir(store.dir) else 0
     initial_line = m.get(ROUND_TRIP_LINE)
     try:
@@ -82,6 +82,8 @@ def run(client, store, fence, audit, count_audit):
     check("iwarm_act_final_state_unchanged", (after.get(ROUND_TRIP_LINE).admin_state, after.get(ROUND_TRIP_LINE).addr) == (initial_line.admin_state, initial_line.addr))
     dumps = len(os.listdir(store.dir)) - start_dumps
     check("dumps_written", dumps >= 3, {"new_dumps": dumps})
+    if push is not None:
+        check("lb_state_pushed", router.sync_failures == 0, {"sync_failures": router.sync_failures})
     check("audit_rows_written", count_audit() >= 3, {"rows": count_audit()})
     report["primary_final"] = {"weight": after.get("primary").weight, "up": after.get("primary").is_up, "maint": after.get("primary").is_maint}
     check("primary_unchanged", report["primary_final"]["weight"] == m.get("primary").weight and after.get("primary").is_maint == m.get("primary").is_maint)
@@ -94,7 +96,7 @@ def main(argv):
     from acquire_lease import AcquireLease
     from cdr_common import advance
     from cdr_db import call
-    from lease_keeper import fenced
+    from routing_bind import hooks
     from open_operation import OpenOperation
     from release_lease import ReleaseLease
     from providers.real import RealAdapter
@@ -129,18 +131,13 @@ def main(argv):
     gen = lease["generation"]
     advance(cfg, op_id, "operation.started", "live_check", "running", "P6.2 live read-only check")
     try:
-        fence = lambda: fenced(cfg, op_id, gen, lambda: None)  # noqa: E731
-
-        def audit(cmd, old, new, dump):
-            ok_, out = call(cfg, "SELECT ops.record_haproxy_command(%s::uuid, %s, %s, %s::jsonb, %s::jsonb, %s)", (op_id, gen, cmd, _json.dumps(old), _json.dumps(new), dump))
-            if not ok_:
-                raise AdminError("audit_failed")
+        fence, audit = hooks(cfg, op_id, gen)
 
         def count():
             ok_, rows = call(cfg, "SELECT count(*) FROM ops.audit_events WHERE action = 'haproxy.command' AND operation_id = %s::uuid", (op_id,))
             return rows[0][0] if ok_ else -1
 
-        passed, report = run(adapter.admin, adapter.store, fence, audit, count)
+        passed, report = run(adapter.admin, adapter.store, fence, audit, count, adapter.push)
         report["operation_id"] = op_id
         print(_json.dumps(report, indent=2, default=str))
         advance(cfg, op_id, "operation.succeeded" if passed else "operation.failed", "done", "succeeded" if passed else "failed",

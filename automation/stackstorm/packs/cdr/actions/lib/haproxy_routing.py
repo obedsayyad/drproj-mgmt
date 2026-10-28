@@ -5,11 +5,13 @@ weight changes precede "maint"/"drain" so the backend never loses its last servi
 every command is preceded by assert_lease (fence), followed by a `show servers state` dump stored in the versioned membership
 store and by an audit record, and its effect is verified from that dump (an unverified effect is an error, never assumed success).
 """
+import logging
 import re
 
 import haproxy_admin as hx
 from haproxy_admin import AdminError
 
+LOG = logging.getLogger(__name__)
 FULL = hx.MAX_WEIGHT
 PRIMARY = "primary"
 UNBOUND_ADDRS = ("", "0.0.0.0")
@@ -139,10 +141,13 @@ def expected_effect(cmd, m):
 
 
 class Router:
-    """fence(): assert_lease; audit(cmd, before, after, dump_name): ops record. Both are injected by the action."""
+    """fence(cmd) -> intent: assert_lease plus the `pending` ops.haproxy_commands row, in one call BEFORE the command is sent.
+    audit(intent, cmd, before, after, dump_name): completes the row after the dump. If it raises, the change stands (no rollback) and the
+    pending row is backfilled by the reconcile pass. push(text): copies the dump to the LB's server-state file (best effort, see sync_failures)."""
 
-    def __init__(self, client, store, fence, audit):
-        self.client, self.store, self.fence, self.audit = client, store, fence, audit
+    def __init__(self, client, store, fence, audit, push=None):
+        self.client, self.store, self.fence, self.audit, self.push = client, store, fence, audit, push
+        self.sync_failures = 0
 
     def membership(self):
         return self.client.show_state()[1]
@@ -151,15 +156,27 @@ class Router:
         """Run commands in order; returns the final Membership. Stops at the first error (remaining commands are not sent)."""
         after = None
         for cmd in cmds:
-            self.fence()
+            intent = self.fence(cmd)
             _, before = self.client.show_state()
             self.client.set_cmd(cmd)
             text, after = self.client.show_state()
             dump = self.store.save(text)
-            self.audit(cmd, _summary(before, cmd), _summary(after, cmd), dump)
+            self._sync(text)  # before the audit: the LB must keep the applied state even when the completion record fails
+            self.audit(intent, cmd, _summary(before, cmd), _summary(after, cmd), dump)
             if not expected_effect(cmd, after):
                 raise AdminError("effect_unverified")
         return after if after is not None else self.membership()
+
+
+    def _sync(self, text):
+        """Every dump is a full state, so a failed push heals with the next one (and with the lb role run). Never raises: the routing change stands."""
+        if self.push is None:
+            return
+        try:
+            self.push(text)
+        except Exception as exc:  # noqa: BLE001 - code only, never transport text
+            self.sync_failures += 1
+            LOG.warning("lb state sync failed code=%s", getattr(exc, "args", ["?"])[0] if isinstance(exc, AdminError) else type(exc).__name__)
 
 
 def _summary(m, cmd):

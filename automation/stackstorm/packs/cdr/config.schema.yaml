@@ -91,6 +91,16 @@ real_adapter:
         client_key: {type: string, required: true, description: "Runner client key (mode 0600), e.g. /run/secrets/haproxy-client.key."}
         ca_bundle: {type: string, required: true, description: "Project CA bundle: verifies fe_admin and the backends (direct primary probes)."}
         state_dir: {type: string, required: true, description: "Versioned membership store on management: /var/lib/drproj/haproxy-state (0700, files 0600)."}
+        lb_ssh:
+          description: "Optional. After every routing dump the dump is copied to the LB's /opt/drproj/lb/state/server-state (fixed destination, 0600) so a HAProxy container restart restores it. Without it the copy is skipped (the lb role still writes the file)."
+          type: object
+          required: false
+          additionalProperties: false
+          properties:
+            host: {type: string, required: true, description: "LB public IP (hosts.load_balancer.public_ip)."}
+            user: {type: string, required: true}
+            key: {type: string, required: true, description: "Path of the management->LB private key inside the runner (mode 0600)."}
+            known_hosts: {type: string, required: false, description: "known_hosts file with the LB host key (StrictHostKeyChecking=yes)."}
     digitalocean:
       type: object
       required: true

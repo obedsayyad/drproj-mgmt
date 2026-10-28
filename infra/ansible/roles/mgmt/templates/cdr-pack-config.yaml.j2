@@ -19,6 +19,12 @@ real_adapter:
     client_key: /run/secrets/haproxy-client.key
     ca_bundle: /etc/drproj/ca-bundle.crt
     state_dir: /var/lib/drproj/haproxy-state
+    # After every routing dump the dump is copied to the LB's state/server-state (docs/08 LB state sync).
+    lb_ssh:
+      host: "{{ mgmt_lb_ip }}"
+      user: "{{ mgmt_lb_ssh_user }}"
+      key: /run/secrets/lb_ssh_key
+      known_hosts: /run/secrets/lb_known_hosts
   ansible:
     playbook_dir: /opt/drproj/ansible
     inputs_path: /etc/drproj/deployment-inputs.local.json

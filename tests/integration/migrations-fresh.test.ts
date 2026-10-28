@@ -28,6 +28,9 @@ describe('migrations SQL', () => {
 
   it('installed @drproj/migrations/sql (if any) matches ../drproj-app', () => {
     if (!existsSync(INSTALLED)) return; // symlinked or absent installs have nothing to drift
-    expect(treeHash(INSTALLED), 'stale node_modules copy: run `pnpm install --force`').toBe(treeHash(SOURCE));
+    expect(
+      treeHash(INSTALLED),
+      `stale copy of the migrations SQL at ${INSTALLED}\nremedy: from the drproj-mgmt root run \`pnpm install --force\` (or remove tests/integration/node_modules/@drproj/migrations and reinstall), then rerun this test`,
+    ).toBe(treeHash(SOURCE));
   });
 });

@@ -231,13 +231,21 @@
   changed_when: true
   tags: [lb, deploy]
 
-- name: Hold every unbound server line in maint (lines are not config-disabled; `state ready` cannot clear a config-disabled line)
+- name: Hold every unbound server line in maint (lines are not config-disabled; `state ready` cannot clear a config-disabled line), then write the state file
   ansible.builtin.shell: |
     set -euo pipefail
     sock() { docker exec {{ lb_project }}-acme-1 sh -c "echo '$1' | socat stdio UNIX-CONNECT:/var/run/haproxy/admin.sock"; }
     for s in $(sock 'show servers state be_app' | awk '$5=="0.0.0.0" && $7%2==0 {print $4}'); do
       sock "set server be_app/$s state maint" >/dev/null; echo "maint $s"
     done
+    # Persist the applied membership after every run (docs/08): a container restart then loads exactly this state. Atomic, owner 99, 0600.
+    tmp={{ lb_dir }}/state/server-state.tmp
+    sock 'show servers state' > "$tmp"
+    if [ "$(head -n1 "$tmp")" = "1" ] && grep -q ' be_app ' "$tmp"; then
+      chown 99:99 "$tmp"; chmod 0600 "$tmp"; mv -f "$tmp" {{ lb_dir }}/state/server-state; echo "state written"
+    else
+      rm -f "$tmp"; echo "state dump invalid" >&2; exit 1
+    fi
   args:
     executable: /bin/bash
   register: lb_unbound_maint

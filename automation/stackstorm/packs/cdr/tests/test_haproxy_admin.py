@@ -292,10 +292,11 @@ class Hooks:
     def __init__(self):
         self.events = []
 
-    def fence(self):
+    def fence(self, cmd):
         self.events.append("fence")
+        return f"intent-{len(self.events)}"
 
-    def audit(self, cmd, old, new, dump):
+    def audit(self, intent, cmd, old, new, dump):
         self.events.append(("audit", cmd, dump))
 
 
@@ -327,7 +328,7 @@ def test_a_lost_lease_stops_before_the_command_is_sent(fake, pki, tmp_path):
     hooks = Hooks()
     a = adapter_for(fake, pki, tmp_path, hooks)
 
-    def lost():
+    def lost(cmd):
         raise LeaseLost("lease_lost")
 
     a.bind(lost, hooks.audit)
@@ -540,6 +541,7 @@ def test_observe_reports_prometheus_unreachable_as_a_failed_gate_and_simulation_
 
 
 # ---------------------------------------------------------------- against a real migrated Postgres (ops/0015)
+from test_provisioning_actions import sim  # noqa: E402,F401
 from test_capacity_actions import act, db, login_url, op_with_lease  # noqa: E402,F401  (db: skips without TEST_DATABASE_URL)
 
 
@@ -614,3 +616,184 @@ def test_the_audit_function_refuses_a_non_server_command_and_a_forged_dump_name(
     for cmd, dump in (("show info\n", "20260101T000000000000Z.state"), ("set server be_app/primary weight 256\n", "../../etc/passwd")):
         with pytest.raises(Exception, match="bad_argument"):
             db.execute("SELECT ops.record_haproxy_command(%s::uuid, %s, %s, '{}'::jsonb, '{}'::jsonb, %s)", (op, gen, cmd, dump))
+
+
+# ---------------------------------------------------------------- P6.2-FIX-1: pre-mutation intent, completion, reconcile backfill, LB state push
+def real_adapter(fake, pki, tmp_path, push=None):
+    return RealAdapter({**REAL_CFG, "haproxy": {"admin_addr": fake.addr, "client_cert": f"{pki}/client.crt", "client_key": f"{pki}/client.key",
+                                               "ca_bundle": f"{pki}/ca.crt", "state_dir": str(tmp_path / "st")}}, push=push)
+
+
+def commands(db, op=None):
+    return db.execute("SELECT status, command, dump, backfilled FROM ops.haproxy_commands ORDER BY created_at, id").fetchall()
+
+
+def test_the_intent_row_is_written_before_the_command_and_completed_with_the_dump(db, fake, pki, tmp_path, monkeypatch):
+    op, gen = op_with_lease(db)
+    seen = []
+    orig = fake._answer
+
+    def spy(cmd):  # at the moment the LB receives the command the intent must already be a committed pending row
+        if cmd.startswith("set server"):
+            seen.append(commands(db))
+        return orig(cmd)
+
+    fake._answer = spy
+    ok, _ = routing_action(monkeypatch, real_adapter(fake, pki, tmp_path)).run(op, gen, "lb", "primary_failure")
+    assert ok
+    assert [[r[0], r[1]] for r in seen[0]] == [["pending", "set server be_app/primary state maint"]]
+    done = commands(db)
+    assert [(r[0], r[3]) for r in done] == [("applied", False)] and done[0][2] in os.listdir(tmp_path / "st")
+
+
+def test_audit_failure_after_the_command_leaves_a_pending_row_and_reconcile_backfills_it(db, fake, pki, tmp_path, monkeypatch):
+    import routing_bind
+
+    op, gen = op_with_lease(db)
+    real_call = routing_bind.call
+
+    def failing(config, sql, params, attempts=3):
+        if "complete_haproxy_command" in sql:
+            return False, "connect_or_network"
+        return real_call(config, sql, params, attempts)
+
+    monkeypatch.setattr(routing_bind, "call", failing)
+    adapter = real_adapter(fake, pki, tmp_path)
+    assert routing_action(monkeypatch, adapter).run(op, gen, "lb", "primary_failure") == (False, "audit_failed")
+    assert fake.servers["primary"][3] == MAINT  # HAProxy is not rolled back: the routing change stands
+    assert [(r[0], r[1]) for r in commands(db)] == [("pending", "set server be_app/primary state maint")]
+    db.execute("UPDATE ops.haproxy_commands SET created_at = now() - interval '5 minutes'")
+    db.execute("SELECT ops.release_lease(%s::uuid, %s)", (op, gen))
+    out = run_reconcile(db, tmp_path, adapter, monkeypatch)
+    assert out["haproxy_backfilled"] == [{"id": out["haproxy_backfilled"][0]["id"], "status": "applied"}]
+    row = commands(db)[0]
+    assert row[0] == "applied" and row[3] is True and row[2] in os.listdir(tmp_path / "st")
+    assert db.execute("SELECT count(*) FROM ops.audit_events WHERE action = 'haproxy.command' AND new_value->>'backfilled' = 'true'").fetchone()[0] == 1
+
+
+def test_a_pending_row_whose_effect_is_not_observable_is_abandoned_not_applied(db, fake, pki, tmp_path, monkeypatch):
+    op, gen = op_with_lease(db)
+    db.execute("SELECT ops.begin_haproxy_command(%s::uuid, %s, 'set server be_app/primary state maint\n')", (op, gen))  # intent written, command never sent
+    db.execute("UPDATE ops.haproxy_commands SET created_at = now() - interval '5 minutes'")
+    db.execute("SELECT ops.release_lease(%s::uuid, %s)", (op, gen))
+    out = run_reconcile(db, tmp_path, real_adapter(fake, pki, tmp_path), monkeypatch)
+    assert [b["status"] for b in out["haproxy_backfilled"]] == ["abandoned"] and commands(db)[0][0] == "abandoned"
+    assert fake.mutations() == []  # reconcile never sends a routing command
+
+
+def test_a_young_pending_row_is_left_to_its_own_worker(db, fake, pki, tmp_path, monkeypatch):
+    op, gen = op_with_lease(db)
+    db.execute("SELECT ops.begin_haproxy_command(%s::uuid, %s, 'set server be_app/primary state maint\n')", (op, gen))
+    db.execute("SELECT ops.release_lease(%s::uuid, %s)", (op, gen))
+    out = run_reconcile(db, tmp_path, real_adapter(fake, pki, tmp_path), monkeypatch)
+    assert "haproxy_backfilled" not in out and commands(db)[0][0] == "pending"
+
+
+def run_reconcile(db, tmp_path, adapter, monkeypatch):
+    import reconcile_pass as rp
+
+    rop, rgen = op_with_lease(db, "reconcile")
+    a = rp.ReconcilePass.__new__(rp.ReconcilePass)
+    a.config = {"supabase_ops_url": login_url()}
+    adapter.list_by_tag = lambda provider, tags: {"state": "unavailable", "code": "provider_error"}
+    monkeypatch.setattr(rp.providers, "load", lambda cfg: adapter)
+    a._api = lambda: (_ for _ in ()).throw(rp.St2Unavailable("st2_api_unavailable"))
+    ok, out = a.run(rop, rgen)
+    assert ok, out
+    db.execute("SELECT ops.release_lease(%s::uuid, %s)", (rop, rgen))
+    return out
+
+
+def test_an_intent_that_cannot_be_written_sends_nothing(db, fake, pki, tmp_path, monkeypatch):
+    import routing_bind
+
+    op, gen = op_with_lease(db)
+    real_call = routing_bind.call
+    monkeypatch.setattr(routing_bind, "call", lambda c, sql, p, **k: (False, "connect_or_network") if "begin_haproxy_command" in sql else real_call(c, sql, p, **k))
+    assert routing_action(monkeypatch, real_adapter(fake, pki, tmp_path)).run(op, gen, "lb", "primary_failure") == (False, "intent_failed")
+    assert fake.mutations() == [] and commands(db) == []
+
+
+def test_a_fenced_worker_writes_no_intent_and_sends_nothing(db, fake, pki, tmp_path, monkeypatch):
+    op, gen = op_with_lease(db)
+    assert routing_action(monkeypatch, real_adapter(fake, pki, tmp_path)).run(op, gen + 1, "lb", "primary_failure") == (False, "lease_lost")
+    assert fake.mutations() == [] and commands(db) == []
+
+
+def test_slot_projection_is_committed_after_haproxy_and_not_at_all_when_haproxy_fails(db, sim, fake, pki, tmp_path, monkeypatch):
+    from test_real_adapter import bound_real_instance
+
+    op, gen, iid = bound_real_instance(db, sim)
+    key, sgen = db.execute("SELECT key, generation FROM ops.capacity_slots WHERE bound_instance_id = %s::uuid", (iid,)).fetchone()
+    db.execute("UPDATE ops.instances SET lifecycle_state = 'ready', public_ip = '203.0.113.9' WHERE id = %s::uuid", (iid,))
+    adapter = real_adapter(fake, pki, tmp_path)
+    mode = lambda: db.execute("SELECT routing_mode FROM ops.instances WHERE id = %s::uuid", (iid,)).fetchone()[0]  # noqa: E731
+    before = mode()
+    fake.overrides["set server"] = "Unknown command\n"
+    code = routing_action(monkeypatch, adapter).run(op, gen, key, "active", slot_generation=sgen)
+    assert code[0] is False and mode() == before  # HAProxy refused: the projection never claims the routing
+    fake.overrides.clear()
+    ok, _ = routing_action(monkeypatch, adapter).run(op, gen, key, "active", slot_generation=sgen)
+    assert ok and mode() == "active"
+
+
+# ---- LB state push
+class Runs:
+    def __init__(self, rc=(0, 0)):
+        self.calls, self.rc, self.files = [], list(rc), []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if argv[0] == "scp":
+            self.files.append((open(argv[-2]).read(), oct(os.stat(argv[-2]).st_mode & 0o777)))
+        return self.rc[len(self.calls) - 1]
+
+
+def test_lb_state_push_copies_to_the_fixed_destination_then_installs_it_0600_atomically():
+    runs = Runs()
+    hx.LbStatePush("203.0.113.5", "root", "/k/id", "/k/known", run=runs)("1\n# state\n")
+    scp, ssh = runs.calls
+    assert scp[0] == "scp" and scp[-1] == "root@203.0.113.5:/opt/drproj/lb/state/server-state.push" and runs.files == [("1\n# state\n", "0o600")]
+    assert ssh[0] == "ssh" and ssh[-2] == "root@203.0.113.5" and ssh[-1] == (
+        "chown 99:99 /opt/drproj/lb/state/server-state.push && chmod 0600 /opt/drproj/lb/state/server-state.push && "
+        "mv -f /opt/drproj/lb/state/server-state.push /opt/drproj/lb/state/server-state")
+    assert "StrictHostKeyChecking=yes" in scp and "BatchMode=yes" in scp
+    for bad in (("203.0.113.5; id", "root"), ("203.0.113.5", "root x")):
+        with pytest.raises(AdminError, match="lb_ssh_config_invalid"):
+            hx.LbStatePush(bad[0], bad[1], "/k", run=runs)("x")
+    for rc, code in (((1, 0), "lb_state_copy_failed"), ((0, 1), "lb_state_install_failed")):
+        with pytest.raises(AdminError, match=code):
+            hx.LbStatePush("203.0.113.5", "root", "/k", run=Runs(rc))("x")
+
+
+def test_every_dump_is_pushed_in_order_and_a_failed_push_neither_stops_the_plan_nor_is_silent(fake, pki, tmp_path, caplog):
+    pushed = []
+    hooks = Hooks()
+    a = adapter_for(fake, pki, tmp_path, hooks)
+    a.push = lambda text: pushed.append(text)
+    assert a.set_routing("lb", "overflow") == 2
+    stored = [(tmp_path / "store" / d).read_text() for d in sorted(os.listdir(tmp_path / "store"))]
+    assert pushed == stored and hx.parse_state(pushed[-1]).get("warm_act").is_ready
+
+    def boom(text):
+        raise AdminError("lb_state_copy_failed")
+
+    b = adapter_for(fake, pki, tmp_path / "b", Hooks())
+    b.push = boom
+    with caplog.at_level("WARNING"):
+        assert b.set_routing("lb", "primary_failure") == 1
+    assert fake.servers["primary"][3] == MAINT and "lb state sync failed code=lb_state_copy_failed" in caplog.text
+
+
+def test_the_dump_reaches_the_lb_even_when_the_audit_completion_fails(fake, pki, tmp_path):
+    pushed = []
+    a = adapter_for(fake, pki, tmp_path, Hooks())
+    a.push = pushed.append
+
+    def bad_audit(*args):
+        raise AdminError("audit_failed")
+
+    a.bind(Hooks().fence, bad_audit)
+    with pytest.raises(AdminError, match="audit_failed"):
+        a.set_routing("lb", "primary_failure")
+    assert len(pushed) == 1 and hx.parse_state(pushed[0]).get("primary").is_maint

@@ -23,6 +23,8 @@ nothing. With the lease it:
 import providers
 from cdr_common import advance, guarded, policy_section
 from cdr_db import call
+from haproxy_admin import AdminError
+from haproxy_routing import expected_effect
 from cleanup import absence_evidence
 from lease_keeper import LeaseKeeper, LeaseLost
 from providers.base import PROJECT_TAG, now_iso
@@ -84,6 +86,7 @@ class ReconcilePass(Action):
             handled = self._operations(coord, previous_holder, api)
             self._providers(handled)
             if not self.observe:
+                self._haproxy_backfill()
                 self._standby_intents(coord)
         except _Db as exc:
             return False, exc.code
@@ -252,6 +255,40 @@ class ReconcilePass(Action):
                 if rid in explained or (tags.get("op") in keep_ops and tags.get("slot") in slots and slots[tags["slot"]][4] == tags.get("op")):
                     continue
                 self._orphan(provider, r, slots)
+
+    # ---- 2b. HAProxy command intents (P6.2-FIX-1)
+    PENDING_GRACE_SECONDS = 30
+
+    def _haproxy_backfill(self):
+        """Close `pending` ops.haproxy_commands rows left by a dead worker. The change stands either way (no rollback). A row is `applied`
+        when a stored dump taken since the intent (else the live membership) shows the command's effect, `abandoned` when neither does
+        (never sent, or superseded by a later command with no dump in between). Live LB unreachable: the row stays pending for the next pass."""
+        if self.adapter.simulated or getattr(self.adapter, "store", None) is None:
+            return
+        rows = self._q("SELECT id::text, command, to_char(created_at AT TIME ZONE 'UTC', 'YYYYMMDD\"T\"HH24MISSUS\"Z\"') FROM ops.haproxy_commands"
+                       " WHERE status = 'pending' AND created_at < now() - make_interval(secs => %s) ORDER BY created_at", (self.PENDING_GRACE_SECONDS,))
+        live = None
+        for cid, command, stamp in rows:
+            self.keeper_check()
+            cmd = command + "\n"
+            hit = next(((n, m) for n, m in self.adapter.store.since(stamp) if expected_effect(cmd, m)), None)
+            if hit is None:
+                try:
+                    if live is None:
+                        text, member = self.adapter.admin.show_state()
+                        live = (self.adapter.store.save(text), member)
+                except (AdminError, AttributeError):
+                    self.summary["errors"].append("haproxy_backfill_lb_unreachable")
+                    return
+                hit = live if expected_effect(cmd, live[1]) else None
+            if hit is None:
+                done = self._w("SELECT ops.backfill_haproxy_command(%s::uuid, %s, %s::uuid, false, NULL, NULL, %s)", (self.op, self.gen, cid, self.app))
+            else:
+                server = hit[1].servers.get(command.split()[2].split("/", 1)[1])
+                new = None if server is None else {"addr": server.addr, "port": server.port, "weight": server.weight, "op_state": server.op_state, "admin_state": server.admin_state}
+                done = self._w("SELECT ops.backfill_haproxy_command(%s::uuid, %s, %s::uuid, true, %s, %s::jsonb, %s)", (self.op, self.gen, cid, hit[0], _json(new), self.app))
+            if done:
+                self.summary.setdefault("haproxy_backfilled", []).append({"id": cid, "status": "abandoned" if hit is None else "applied"})
 
     # ---- 3. standby intents (P4.4)
     def _intent(self, kind, fingerprint, event, message, backoff):

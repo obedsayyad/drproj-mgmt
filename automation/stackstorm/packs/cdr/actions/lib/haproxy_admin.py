@@ -9,6 +9,8 @@ import os
 import re
 import socket
 import ssl
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -232,6 +234,19 @@ class MembershipStore:
             fh.write(text)
         return name
 
+    def since(self, stamp):
+        """(name, parsed Membership) of dumps taken at or after `stamp` (UTC %Y%m%dT%H%M%S%fZ), oldest first; unparsable dumps are skipped."""
+        out = []
+        if not os.path.isdir(self.dir):
+            return out
+        for name in sorted(n for n in os.listdir(self.dir) if n.endswith(".state") and n >= stamp):
+            try:
+                with open(os.path.join(self.dir, name)) as fh:
+                    out.append((name, parse_state(fh.read())))
+            except (OSError, AdminError):
+                continue
+        return out
+
     def latest_valid(self, expected):
         """Newest dump that parses and contains every expected be_app server line; None when none validates."""
         if not os.path.isdir(self.dir):
@@ -245,3 +260,39 @@ class MembershipStore:
             except (OSError, AdminError):
                 continue
         return None
+
+
+class LbStatePush:
+    """Copies a `show servers state` dump to the LB's server-state file so a HAProxy container restart loads the last applied membership.
+
+    Fixed destination, no caller-supplied path or command: scp to <dest>.push, then one fixed ssh command that sets owner 99 (the haproxy
+    user), mode 0600 and renames it into place (atomic). Uses the management->LB SSH key. `run` is injectable for tests."""
+
+    DEST = "/opt/drproj/lb/state/server-state"
+    REMOTE_FIX = f"chown 99:99 {DEST}.push && chmod 0600 {DEST}.push && mv -f {DEST}.push {DEST}"
+
+    def __init__(self, host, user, key, known_hosts=None, timeout=20, run=None):
+        self.host, self.user, self.key, self.known_hosts, self.timeout = host, user, key, known_hosts, timeout
+        self._run = run or self._exec
+
+    def _opts(self):
+        o = ["-i", self.key, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes", "-o", f"ConnectTimeout={self.timeout}"]
+        return o + (["-o", f"UserKnownHostsFile={self.known_hosts}"] if self.known_hosts else [])
+
+    def _exec(self, argv):
+        try:
+            return subprocess.run(argv, capture_output=True, timeout=self.timeout * 2, check=False).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            return 255
+
+    def __call__(self, text):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", self.user) or not re.fullmatch(r"[0-9.]{7,15}", self.host):
+            raise AdminError("lb_ssh_config_invalid")
+        with tempfile.NamedTemporaryFile("w", prefix="server-state-") as fh:
+            os.chmod(fh.name, 0o600)
+            fh.write(text)
+            fh.flush()
+            if self._run(["scp", "-q", *self._opts(), fh.name, f"{self.user}@{self.host}:{self.DEST}.push"]) != 0:
+                raise AdminError("lb_state_copy_failed")
+        if self._run(["ssh", *self._opts(), f"{self.user}@{self.host}", self.REMOTE_FIX]) != 0:
+            raise AdminError("lb_state_install_failed")

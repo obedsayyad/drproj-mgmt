@@ -45,6 +45,7 @@ def db():
         c.execute("DELETE FROM ops.incident_events")
         c.execute("DELETE FROM ops.incidents")
         c.execute("DELETE FROM ops.processed_events")
+        c.execute("DELETE FROM ops.haproxy_commands")
         c.execute("DELETE FROM ops.operations")
         c.execute("DELETE FROM ops.policy_versions")
         c.execute("UPDATE ops.runtime_flags SET maintenance = false, metrics_stale_since = NULL")
