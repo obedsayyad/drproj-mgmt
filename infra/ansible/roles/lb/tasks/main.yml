@@ -51,6 +51,7 @@
     - { src: compose.yaml }
     - { src: haproxy/haproxy.cfg }
     - { src: haproxy/errors/503.http }
+    - { src: haproxy/admin_allow.regex }
   loop_control:
     label: "{{ item.src }}"
   register: lb_files
@@ -124,10 +125,12 @@
 
 - name: Keep the applied server state before any recreate (docs/08, dump before reload)
   ansible.builtin.shell: |
-    set -eu
+    set -euo pipefail
     if docker exec {{ lb_project }}-haproxy-1 true 2>/dev/null && docker exec {{ lb_project }}-acme-1 true 2>/dev/null; then
-      docker exec {{ lb_project }}-acme-1 sh -c 'echo "show servers state" | socat stdio UNIX-CONNECT:/var/run/haproxy/admin.sock' > {{ lb_dir }}/state/server-state.new &&
-      chown 99:99 {{ lb_dir }}/state/server-state.new && mv {{ lb_dir }}/state/server-state.new {{ lb_dir }}/state/server-state
+      docker exec {{ lb_project }}-acme-1 sh -c 'echo "show servers state" | socat stdio UNIX-CONNECT:/var/run/haproxy/admin.sock' \
+        > {{ lb_dir }}/state/server-state.new
+      chown 99:99 {{ lb_dir }}/state/server-state.new
+      mv {{ lb_dir }}/state/server-state.new {{ lb_dir }}/state/server-state
     fi
   args:
     executable: /bin/bash

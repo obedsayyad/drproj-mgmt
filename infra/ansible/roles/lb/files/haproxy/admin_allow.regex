@@ -1,0 +1,5 @@
+^show (info|stat)\n$
+^show servers (state|conn)( be_app)?\n$
+^set server be_app/[A-Za-z0-9_-]{1,32} state (ready|drain|maint)\n$
+^set server be_app/[A-Za-z0-9_-]{1,32} weight [0-9]{1,3}%?\n$
+^set server be_app/[A-Za-z0-9_-]{1,32} addr [0-9]{1,3}(\.[0-9]{1,3}){3} port [0-9]{1,5}\n$

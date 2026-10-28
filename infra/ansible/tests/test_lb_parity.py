@@ -4,7 +4,7 @@ import os
 from conftest import ROOT
 
 SRC = os.path.abspath(os.path.join(ROOT, "..", "..", "..", "drproj-app", "deploy", "compose", "lb"))
-FILES = {"compose.yaml": "compose.yaml", "haproxy/haproxy.cfg": "haproxy/haproxy.cfg", "haproxy/errors/503.http": "haproxy/errors/503.http"}
+FILES = {"compose.yaml": "compose.yaml", "haproxy/haproxy.cfg": "haproxy/haproxy.cfg", "haproxy/errors/503.http": "haproxy/errors/503.http", "haproxy/admin_allow.regex": "haproxy/admin_allow.regex"}
 
 
 def test_vendored_lb_files_match_the_source():
