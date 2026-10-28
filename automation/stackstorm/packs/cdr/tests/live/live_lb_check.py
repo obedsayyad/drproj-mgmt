@@ -116,10 +116,15 @@ def main(argv):
         print(_json.dumps({"error": op}))
         return 2
     op_id = op["operation_id"]
-    ok, lease = act(AcquireLease).run(op_id)
-    if not ok or not lease.get("acquired"):
+    for _ in range(6):  # the reconcile timer holds the lease for a few seconds at a time
+        ok, lease = act(AcquireLease).run(op_id)
+        if ok and lease.get("acquired"):
+            break
+        time.sleep(5)
+    else:
         print(_json.dumps({"error": "lease_unavailable"}))
-        advance(cfg, op_id, "operation.failed", "live_check", "failed", "live check could not take the lease", {"error": "lease_unavailable"})
+        # a queued operation can only end as a terminal no-op (ops._operation_transition_ok), never as failed
+        advance(cfg, op_id, "operation.succeeded", "live_check", "succeeded", "live check could not take the lease", {"noop_reason": "lease_unavailable"})
         return 2
     gen = lease["generation"]
     advance(cfg, op_id, "operation.started", "live_check", "running", "P6.2 live read-only check")
