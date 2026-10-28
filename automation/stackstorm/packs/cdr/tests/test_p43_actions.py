@@ -244,10 +244,10 @@ def test_apply_routing_warm_resolves_the_bound_standby_or_reports_none(db, sim, 
     assert db.execute("SELECT routing_mode FROM ops.instances WHERE slot_key = 'warm'").fetchone()[0] == "active"
 
 
-def test_apply_routing_reports_the_real_adapter_as_not_implemented(db, tmp_path):
+def test_apply_routing_refuses_the_real_adapter_without_haproxy_settings(db, tmp_path):
     op, gen = lease_of(db, "primary_failure")
     a = make(ApplyRouting, tmp_path, provider_adapter="real", real_adapter=REAL_CFG)
-    assert a.run(op, gen, "primary", "maint") == (False, "not_implemented")
+    assert a.run(op, gen, "primary", "maint") == (False, "provider_adapter_missing_or_unknown")  # AdapterConfigError: real_adapter.haproxy missing
 
 
 def test_drain_instance_reports_drained_or_times_out_without_deleting(db, sim, tmp_path):

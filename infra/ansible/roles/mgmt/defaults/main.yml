@@ -70,3 +70,4 @@ mgmt_lb_ip: "{{ inputs.hosts.load_balancer.public_ip }}"
 mgmt_runner_client_days: 90
 mgmt_runner_client_renew_days: 30
 mgmt_ca_dir: /etc/drproj/ca
+mgmt_haproxy_state_dir: /var/lib/drproj/haproxy-state

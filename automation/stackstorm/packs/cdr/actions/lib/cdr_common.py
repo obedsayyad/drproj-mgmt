@@ -3,6 +3,7 @@ import functools
 import json
 
 from cdr_db import call
+from haproxy_admin import AdminError
 from lease_keeper import LeaseLost
 from prom_target import PolicyCompileConfigError
 from providers import AdapterConfigError
@@ -23,6 +24,8 @@ def guarded(fn):
             return False, str(exc)
         except NotImplementedError:
             return False, "not_implemented"
+        except AdminError as exc:  # short code only (admin_unreachable, command_refused, effect_unverified, ...)
+            return False, str(exc)
 
     return wrapper
 
@@ -52,7 +55,7 @@ def policy_section(config, operation_id, section):
 
 
 # Failure codes a workflow names on purpose; recorded as the outcome error instead of the raw task result.
-KNOWN_CODES = ("not_implemented", "policy_invalid", "reload_failed", "verify_failed", "template_missing", "lease_unavailable", "held_uncertain")
+KNOWN_CODES = ("not_implemented", "policy_invalid", "reload_failed", "verify_failed", "template_missing", "lease_unavailable", "held_uncertain", "failback_regressed")
 
 
 def failure_code(text, default="workflow_error"):

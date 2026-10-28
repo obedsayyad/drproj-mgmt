@@ -1,0 +1,10 @@
+---
+name: capture_baseline
+pack: cdr
+description: "Store the median app p95 of the 10 minutes before the primary failure on the open incident (failback p95 gate baseline). Never fails the workflow."
+runner_type: python-script
+entry_point: capture_baseline.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 30}
+  operation_id: {type: string, required: true}

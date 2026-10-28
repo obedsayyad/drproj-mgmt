@@ -340,7 +340,6 @@ def test_a_failure_with_the_lease_held_releases_it():
 
 # ------------------------------------------------------------------ skeletons
 SKELETONS = {
-    "failback": ["direct_probes", "weight_zero", "ready_gate", "rise_counts", "ramp_10", "ramp_50", "ramp_100", "reverse_on_regression"],
     "start_load_test": ["validate_bounds", "start_k6", "observe"],
     "stop_load_test": ["stop_k6"],
     "create_backup": ["backup_lease", "pg_dump_capture", "record_artifact", "verify_after_capture", "expire_old"],

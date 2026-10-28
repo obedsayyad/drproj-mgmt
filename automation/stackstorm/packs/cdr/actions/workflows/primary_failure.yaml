@@ -71,11 +71,18 @@ tasks:
       operation_id: <% ctx().operation_id %>
     next:
       - when: <% succeeded() %>
-        do: acquire
+        do: baseline
       - when: <% failed() %>
         publish:
           - error: <% result() %>
         do: fail_handler
+  baseline:
+    action: cdr.capture_baseline
+    input:
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% completed() %>
+        do: acquire
   acquire:
     action: cdr.wait_lease
     input:

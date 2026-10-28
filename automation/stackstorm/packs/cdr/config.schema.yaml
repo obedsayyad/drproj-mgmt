@@ -80,6 +80,17 @@ real_adapter:
         inputs_path: {type: string, required: true, description: "Absolute path of deployment-inputs.local.json on the runner (read-only mount)."}
         ssh_key_path: {type: string, required: true, description: "Absolute path of the cloud VM private key file on the runner (read-only mount, mode 0600). A path only: key material is never in this config."}
         ansible_bin: {type: string, required: false, description: "Optional ansible-playbook override (tests use a fake; the runner image uses PATH)."}
+    haproxy:
+      description: "HAProxy Runtime API (P6.2). Optional here; without it the real adapter refuses every routing change (real_adapter_config_missing), it never pretends. Paths only: no key material in this config."
+      type: object
+      required: false
+      additionalProperties: false
+      properties:
+        admin_addr: {type: string, required: true, description: "fe_admin address host:9999 (mTLS; the server certificate SAN is the LB IP)."}
+        client_cert: {type: string, required: true, description: "Runner client certificate (CN drproj-runner), e.g. /run/secrets/haproxy-client.crt."}
+        client_key: {type: string, required: true, description: "Runner client key (mode 0600), e.g. /run/secrets/haproxy-client.key."}
+        ca_bundle: {type: string, required: true, description: "Project CA bundle: verifies fe_admin and the backends (direct primary probes)."}
+        state_dir: {type: string, required: true, description: "Versioned membership store on management: /var/lib/drproj/haproxy-state (0700, files 0600)."}
     digitalocean:
       type: object
       required: true

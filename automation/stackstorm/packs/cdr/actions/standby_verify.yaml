@@ -1,7 +1,7 @@
 ---
 name: standby_verify
 pack: cdr
-description: "Done criteria of a standby repair: ready, deployed digest matches the pinned one, routing shows the server UP as backup (simulated until P6)."
+description: "Done criteria of a standby repair: ready, deployed digest matches the pinned one, routing shows the server UP as backup (HAProxy server state on the real adapter)."
 runner_type: python-script
 entry_point: standby_verify.py
 enabled: true

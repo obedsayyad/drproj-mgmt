@@ -1,9 +1,10 @@
 ---
 name: failback
 pack: cdr
-description: "Automatic failback to the primary (docs/04): not implemented until P6 (HAProxy routing). Fails with not_implemented."
+description: "Automatic failback to the primary (docs/04): direct probes, weight 0, ready, rise 6, ramp 10/50/100 gated on PromQL. Real adapter only; with the simulation adapter it fails not_implemented at direct_probes."
 runner_type: orquesta
 entry_point: workflows/failback.yaml
 enabled: true
 parameters:
   operation_id: {type: string, required: true}
+  app_key: {type: string, default: relief}

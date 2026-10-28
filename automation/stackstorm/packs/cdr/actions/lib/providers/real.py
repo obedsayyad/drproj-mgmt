@@ -11,14 +11,21 @@ Result mapping (never "absent" from silence):
   delete                 ok only when no slot state of the provider still holds the id; otherwise unknown
 ansible_deploy        ansible-playbook app.yml limited to one instance (AnsibleRunner): rc 0 with matching ready/identity/digest facts -> ok;
                       non-zero, timeout, or facts that do not verify -> failed (never timeout_ambiguous: the VM exists)
-check_ready / set_routing / drain / pinned_digest stay unimplemented (HAProxy P6).
+set_routing / drain / membership  HAProxy Runtime API (haproxy_admin.AdminClient, mTLS, one command per connection); every mutation is fenced
+                      (assert_lease), followed by a stored `show servers state` dump and an audit record. An unknown answer is an error.
+check_ready           GET https://<ip>:8443/health/ready with the backend CA bundle; unreachable or unexpected -> unknown, never ready
+deploy / pinned_digest stay unimplemented (the pinned digest is the primary's recorded image_digest, read by the caller).
 """
 import json
+
+import requests
 
 from .base import AdapterConfigError, ProviderAdapter, tags_for
 from .ansible_runner import AnsibleRunner
 from .http_api import DigitalOceanHttp, LinodeHttp
 from .tf_runner import TfRunner, required
+from haproxy_admin import AdminClient, AdminError, MembershipStore
+from haproxy_routing import Router, lines_for_slot, plan_mode, plan_primary, plan_slot
 
 PROVIDERS = ("digitalocean", "linode")
 DEFAULT_VCPU = 1
@@ -29,7 +36,7 @@ class RealAdapter(ProviderAdapter):
     simulated = False
     mode = "real"
 
-    def __init__(self, cfg, http=None, runner=None, ansible=None, ops_url=None):
+    def __init__(self, cfg, http=None, runner=None, ansible=None, ops_url=None, admin=None, store=None):
         self.cfg = cfg
         required(cfg, "tf_slot_script")
         required(cfg, "tf_state_dir")
@@ -40,6 +47,11 @@ class RealAdapter(ProviderAdapter):
         self.runner = runner or TfRunner(cfg["tf_slot_script"], cfg["tf_state_dir"],
                                          {p: cfg[p]["token_env"] for p in PROVIDERS}, cfg.get("terraform_bin"))
         self.ansible = ansible or (AnsibleRunner(cfg["ansible"], ops_url) if cfg.get("ansible") else None)
+        hp = cfg.get("haproxy")
+        self.admin = admin or (AdminClient(hp["admin_addr"], hp["client_cert"], hp["client_key"], hp["ca_bundle"]) if hp else None)
+        self.store = store or (MembershipStore(hp["state_dir"]) if hp else None)
+        self.ca_bundle = (hp or {}).get("ca_bundle")
+        self._fence = self._audit = None
 
     # ---- HTTP side
     def _api(self, provider):
@@ -140,3 +152,58 @@ class RealAdapter(ProviderAdapter):
         if stats.get("ready") is not True or str(stats.get("instance_id")) != str(target["instance_id"]) or not stats.get("digest"):
             return {"result": "failed", "code": "deploy_unverified"}
         return {"result": "ok", "state": "ready", "identity": stats["instance_id"], "image_digest": stats["digest"]}
+
+    # ---- HAProxy side
+    def bind(self, fence, audit):
+        """The action supplies fence() (assert_lease) and audit(cmd, old, new, dump_name) (ops record); routing refuses to run unbound."""
+        self._fence, self._audit = fence, audit
+        return self
+
+    def _router(self):
+        if self.admin is None or self.store is None:
+            raise AdapterConfigError("real_adapter_config_missing")
+        if self._fence is None or self._audit is None:
+            raise AdapterConfigError("routing_not_bound")
+        return Router(self.admin, self.store, self._fence, self._audit)
+
+    def membership(self):
+        if self.admin is None:
+            raise AdapterConfigError("real_adapter_config_missing")
+        return self.admin.show_state()[1]
+
+    def set_routing(self, target, mode, ip=None, serving=(), step_percent=None):
+        """target: 'lb' (modes normal|overflow|ramp|primary_failure), 'primary' (maint|normal) or a slot key (none|backup|active|draining).
+        Returns the number of commands sent (0 = already in that state)."""
+        router = self._router()
+        m = router.membership()
+        if target == "lb":
+            cmds = plan_mode(mode, m, serving, step_percent)
+        elif target == "primary":
+            cmds = plan_primary(mode, m)
+        else:
+            cmds = plan_slot(target, mode, m, ip)
+        router.apply(cmds)
+        return len(cmds)
+
+    def drain(self, provider, resource_id, slot_key=None):
+        """First call puts the slot's line in drain; every call answers from `show servers conn`: drained (scur 0) | busy | unknown."""
+        if slot_key is None:
+            return "unknown"
+        try:
+            self.set_routing(slot_key, "draining")
+            _, act = lines_for_slot(slot_key)
+            return "drained" if self.admin.show_conn().get(act) == 0 else "busy"
+        except AdminError:
+            return "unknown"
+
+    def check_ready(self, provider, resource_id, ip=None):
+        if not ip:
+            return {"state": "unknown"}
+        try:
+            r = requests.get(f"https://{ip}:8443/health/ready", timeout=4, verify=self.ca_bundle or True)
+            body = r.json() if r.status_code == 200 else {}
+        except (requests.RequestException, ValueError):
+            return {"state": "unknown"}
+        if r.status_code == 200 and body.get("status") == "ready":
+            return {"state": "ready", "identity": body.get("instance_id")}
+        return {"state": "not_ready" if r.status_code == 503 else "unknown"}

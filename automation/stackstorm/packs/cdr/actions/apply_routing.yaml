@@ -1,7 +1,7 @@
 ---
 name: apply_routing
 pack: cdr
-description: "SIMULATED routing change (primary maint/normal, slot none/backup/active/draining); HAProxy is P6."
+description: "Routing change. Simulation adapter: projection only. Real adapter: HAProxy Runtime API (target lb: normal|overflow|ramp|primary_failure; primary maint/normal; slot none/backup/active/draining), fenced, dumped and audited per command."
 runner_type: python-script
 entry_point: apply_routing.py
 enabled: true
@@ -12,3 +12,4 @@ parameters:
   mode: {type: string, required: true}
   slot_generation: {type: integer, default: 0}
   weight: {type: integer}
+  step_percent: {type: integer, minimum: 0, maximum: 100}

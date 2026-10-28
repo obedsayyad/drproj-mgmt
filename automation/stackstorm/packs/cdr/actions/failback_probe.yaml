@@ -1,0 +1,12 @@
+---
+name: failback_probe
+pack: cdr
+description: "Failback: direct /health/live + /health/ready probes of the primary from management for failback.stable_seconds continuously (real adapter only)."
+runner_type: python-script
+entry_point: failback_probe.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 600}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  poll_seconds: {type: integer, default: 5}

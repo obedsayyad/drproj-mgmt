@@ -102,7 +102,7 @@ def test_primary_failure_supersedes_then_routes_then_ensures_exactly_one_elastic
     status, ran = run("primary_failure", PF)
     assert status == statuses.SUCCEEDED
     order = names(ran)
-    assert order.index("supersede") < order.index("incident") < order.index("acquire") < order.index("route_primary") < order.index("route_warm") < order.index("ensure") < order.index("provision") < order.index("route_elastic")
+    assert order.index("supersede") < order.index("incident") < order.index("baseline") < order.index("acquire") < order.index("route_primary") < order.index("route_warm") < order.index("ensure") < order.index("provision") < order.index("route_elastic")
     assert [r[2]["kind"] for r in ran if r[0] == "supersede"] == ["scale_in"]
     assert [(r[2]["target"], r[2]["mode"]) for r in ran if r[1] == "cdr.apply_routing"][:2] == [("primary", "maint"), ("warm", "active")]
     assert order.count("ensure") == 1 and released_with_generation(ran)

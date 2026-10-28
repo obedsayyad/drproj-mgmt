@@ -1,14 +1,33 @@
 version: 1.0
 description: >
-  SKELETON (P6). Automatic failback to the primary (docs/04): not implemented until P6 (HAProxy routing). Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
-  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
-  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+  Automatic failback to the primary (docs/04). Real adapter: lease (exclusive capacity lock), 60 s of direct probes, primary weight 0 and state
+  ready (ramp mode), wait for HAProxy UP (rise 6), then ramp 10% / 50% / 100% (100% = normal mode) with observation 60 / 60 / 120 s gated on
+  PromQL (lib/promql.py); a regression reverses one step and records failback_regressed (incident stays open). Done: warm back to backup,
+  incident resolved. Simulation adapter: there is no primary to probe; the first step fails not_implemented before any lease or routing.
+  Policy steps are fixed at 10/50/100 here; the observation seconds and gate thresholds come from the captured policy (failback.*).
 input:
   - operation_id
+  - app_key: relief
 vars:
+  - generation: 0
+  - simulated: true
+  - adapter_mode: ''
+  - noop_reason: ''
   - error: {}
   - failed_step: ''
 tasks:
+  adapter:
+    action: cdr.adapter_info
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - simulated: <% result().result.simulated %>
+          - adapter_mode: <% result().result.adapter_mode %>
+        do: start
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
   start:
     action: cdr.update_ops_state
     input:
@@ -17,6 +36,53 @@ tasks:
       step: start
       status: running
       execution_id: <% ctx().st2.action_execution_id %>
+      adapter_mode: <% ctx().adapter_mode %>
+    next:
+      - when: <% succeeded() and ctx().simulated %>
+        do: simulation_stub
+      - when: <% succeeded() and not ctx().simulated %>
+        do: acquire
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  simulation_stub:
+    action: cdr.not_implemented
+    input:
+      step: direct_probes
+      phase: P6
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: direct_probes
+        do: fail_handler
+  acquire:
+    action: cdr.acquire_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      app_key: <% ctx().app_key %>
+    next:
+      - when: <% succeeded() and result().result.acquired %>
+        publish:
+          - generation: <% result().result.generation %>
+        do: step_lease
+      - when: <% succeeded() and not result().result.acquired %>
+        publish:
+          - noop_reason: lease_held
+        do: noop_no_lease
+      - when: <% failed() %>
+        publish:
+          - noop_reason: lease_unavailable
+        do: noop_no_lease
+  step_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: lease_acquired
+      status: running
+      message: <% 'capacity lease held at generation ' + str(ctx().generation) %>
     next:
       - when: <% succeeded() %>
         do: direct_probes
@@ -25,111 +91,316 @@ tasks:
           - error: <% result() %>
         do: fail_handler
   direct_probes:
-    action: cdr.not_implemented
+    action: cdr.failback_probe
     input:
-      step: direct_probes
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
     next:
-      - when: <% succeeded() %>
+      - when: <% succeeded() and result().result.stable %>
         do: weight_zero
+      - when: <% succeeded() and not result().result.stable %>
+        publish:
+          - noop_reason: primary_not_stable
+        do: noop_release
       - when: <% failed() %>
         publish:
           - error: <% result() %>
           - failed_step: direct_probes
         do: fail_handler
   weight_zero:
-    action: cdr.not_implemented
+    action: cdr.apply_routing
     input:
-      step: weight_zero
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: lb
+      mode: ramp
+      step_percent: 0
     next:
       - when: <% succeeded() %>
-        do: ready_gate
+        do: wait_up
       - when: <% failed() %>
         publish:
           - error: <% result() %>
           - failed_step: weight_zero
         do: fail_handler
-  ready_gate:
-    action: cdr.not_implemented
+  wait_up:
+    action: cdr.failback_wait_up
     input:
-      step: ready_gate
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
     next:
-      - when: <% succeeded() %>
-        do: rise_counts
+      - when: <% succeeded() and result().result.up %>
+        do: route_10
+      - when: <% succeeded() and not result().result.up %>
+        publish:
+          - failed_step: wait_up
+        do: reverse_0
       - when: <% failed() %>
         publish:
           - error: <% result() %>
-          - failed_step: ready_gate
+          - failed_step: wait_up
         do: fail_handler
-  rise_counts:
-    action: cdr.not_implemented
+  route_10:
+    action: cdr.apply_routing
     input:
-      step: rise_counts
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: lb
+      mode: ramp
+      step_percent: 10
     next:
       - when: <% succeeded() %>
         do: ramp_10
       - when: <% failed() %>
         publish:
           - error: <% result() %>
-          - failed_step: rise_counts
+          - failed_step: route_10
         do: fail_handler
   ramp_10:
-    action: cdr.not_implemented
+    action: cdr.failback_observe
     input:
-      step: ramp_10
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      step_percent: 10
+    next:
+      - when: <% succeeded() and result().result.passed %>
+        do: route_50
+      - when: <% succeeded() and not result().result.passed %>
+        publish:
+          - failed_step: ramp_10
+        do: reverse_0
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: ramp_10
+        do: fail_handler
+  route_50:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: lb
+      mode: ramp
+      step_percent: 50
     next:
       - when: <% succeeded() %>
         do: ramp_50
       - when: <% failed() %>
         publish:
           - error: <% result() %>
-          - failed_step: ramp_10
+          - failed_step: route_50
         do: fail_handler
   ramp_50:
-    action: cdr.not_implemented
+    action: cdr.failback_observe
     input:
-      step: ramp_50
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      step_percent: 50
+    next:
+      - when: <% succeeded() and result().result.passed %>
+        do: route_100
+      - when: <% succeeded() and not result().result.passed %>
+        publish:
+          - failed_step: ramp_50
+        do: reverse_10
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: ramp_50
+        do: fail_handler
+  route_100:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: lb
+      mode: normal
     next:
       - when: <% succeeded() %>
         do: ramp_100
       - when: <% failed() %>
         publish:
           - error: <% result() %>
-          - failed_step: ramp_50
+          - failed_step: route_100
         do: fail_handler
   ramp_100:
-    action: cdr.not_implemented
+    action: cdr.failback_observe
     input:
-      step: ramp_100
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      step_percent: 100
     next:
-      - when: <% succeeded() %>
-        do: reverse_on_regression
+      - when: <% succeeded() and result().result.passed %>
+        do: route_backup
+      - when: <% succeeded() and not result().result.passed %>
+        publish:
+          - failed_step: ramp_100
+        do: reverse_50
       - when: <% failed() %>
         publish:
           - error: <% result() %>
           - failed_step: ramp_100
         do: fail_handler
-  reverse_on_regression:
-    action: cdr.not_implemented
+  reverse_50:
+    action: cdr.apply_routing
     input:
-      step: reverse_on_regression
-      phase: P6
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: lb
+      mode: ramp
+      step_percent: 50
     next:
+      - when: <% succeeded() %>
+        do: regressed
       - when: <% failed() %>
         publish:
           - error: <% result() %>
           - failed_step: reverse_on_regression
         do: fail_handler
+  reverse_10:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: lb
+      mode: ramp
+      step_percent: 10
+    next:
+      - when: <% succeeded() %>
+        do: regressed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: reverse_on_regression
+        do: fail_handler
+  reverse_0:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: lb
+      mode: ramp
+      step_percent: 0
+    next:
+      - when: <% succeeded() %>
+        do: regressed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: reverse_on_regression
+        do: fail_handler
+  regressed:
+    action: cdr.fail_operation
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      error: {code: failback_regressed, detail: <% ctx().failed_step %>}
+      step: reverse_on_regression
+  route_backup:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: warm
+      mode: backup
+    next:
+      - when: <% succeeded() %>
+        do: verifying
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: route_backup
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: primary serving at full share; warm back to backup
+    next:
+      - when: <% succeeded() %>
+        do: resolve
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: verifying
+        do: fail_handler
+  resolve:
+    action: cdr.resolve_incident
+    input:
+      fingerprint: primary.unhealthy:relief
+      message: primary recovered; failback verified
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+          - failed_step: resolve
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: {adapter: <% ctx().adapter_mode %>, steps: [10, 50, 100]}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_release:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  noop_no_lease:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: noop
+      status: succeeded
+      message: <% 'no action - ' + ctx().noop_reason %>
+      outcome: {noop_reason: <% ctx().noop_reason %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  release:
+    action: cdr.release_lease
+    input:
+      operation_id: <% ctx().operation_id %>
+      generation: <% ctx().generation %>
+      app_key: <% ctx().app_key %>
+    retry:
+      when: <% failed() %>
+      count: 5
+      delay: 10
   fail_handler:
     action: cdr.fail_operation
     input:
       operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
       error: <% ctx().error %>
       step: <% ctx().failed_step or 'start' %>
     retry:

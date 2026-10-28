@@ -71,6 +71,7 @@ HAPPY = {
     "cdr.release_lease": py({"released": True}),
     "cdr.fail_operation": py({"status": "failed"}),
     "cdr.open_incident": py({"incident_id": "x", "created": True}),
+    "cdr.capture_baseline": py({"recorded": False, "reason": "simulation"}),
     "core.noop": py({}),
 }
 

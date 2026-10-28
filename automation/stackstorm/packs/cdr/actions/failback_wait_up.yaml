@@ -1,0 +1,13 @@
+---
+name: failback_wait_up
+pack: cdr
+description: "Failback: wait until HAProxy reports the primary UP after state ready (rise 6) (real adapter only)."
+runner_type: python-script
+entry_point: failback_wait_up.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 300}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  timeout_seconds: {type: integer, default: 180}
+  poll_seconds: {type: integer, default: 5}

@@ -12,6 +12,13 @@ prometheus_expected_jobs: relief
 real_adapter:
   tf_slot_script: /opt/drproj/scripts/tf-slot.sh
   tf_state_dir: "{{ inputs.cloud_application.terraform.tf_state_dir }}"
+  # HAProxy Runtime API (P6.2): mTLS with the runner client certificate (lb-admin leaf SAN = LB IP); dumps go to the membership store.
+  haproxy:
+    admin_addr: "{{ mgmt_lb_ip }}:9999"
+    client_cert: /run/secrets/haproxy-client.crt
+    client_key: /run/secrets/haproxy-client.key
+    ca_bundle: /etc/drproj/ca-bundle.crt
+    state_dir: /var/lib/drproj/haproxy-state
   ansible:
     playbook_dir: /opt/drproj/ansible
     inputs_path: /etc/drproj/deployment-inputs.local.json

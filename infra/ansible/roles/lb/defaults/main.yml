@@ -24,3 +24,14 @@ lb_exempt_ips: "{{ inputs.rate_limit_exempt_ips | default([]) }}"
 lb_backup_dir: "{{ inputs.backup.dir | default('/var/backups/drproj') }}/lb"
 lb_ready_retries: 30
 lb_ready_delay: 4
+
+# Versioned membership store (docs/08): `show servers state` dumps on the management VM, written by the routing adapter (before and after every
+# mutation) and by this role (before every reload). The role loads server-state from the latest dump that validates.
+lb_state_store: /var/lib/drproj/haproxy-state
+lb_state_store_owner: "103"   # st2 (the runner writes the store)
+lb_state_store_group: "104"
+# be_app server lines declared in haproxy.cfg: a dump is valid only when all of them are present.
+lb_expected_servers: >-
+  {{ (lookup('ansible.builtin.file', role_path ~ '/files/haproxy/haproxy.cfg')
+  | regex_search('(?sm)^backend be_app.*?(?=\n(?:backend|frontend|listen|defaults|global) |\Z)'))
+  | regex_findall('(?m)^\s+server\s+"?([A-Za-z0-9_-]+)"?\s') }}

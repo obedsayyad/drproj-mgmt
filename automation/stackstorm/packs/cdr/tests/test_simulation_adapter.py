@@ -133,7 +133,10 @@ def test_load_selects_simulation_or_real_and_the_real_adapter_leaves_deploy_read
     assert sim.simulated is True and sim.mode == "simulation" and sim.faults("digitalocean") == {}
     real = providers.load({"provider_adapter": "real", "real_adapter": REAL_CFG})
     assert isinstance(real, RealAdapter) and real.simulated is False and real.mode == "real"
-    for call in (lambda: real.deploy("linode", "x"), lambda: real.check_ready("linode", "x"), lambda: real.set_routing("warm", "active"),
-                 lambda: real.drain("linode", "x"), lambda: real.pinned_digest()):
+    for call in (lambda: real.deploy("linode", "x"), lambda: real.pinned_digest()):
         with pytest.raises(NotImplementedError):
             call()
+    # routing (P6.2) needs the real_adapter.haproxy settings and a bound fence/audit; without them it refuses, it never pretends
+    with pytest.raises(AdapterConfigError):
+        real.set_routing("warm", "active")
+    assert real.drain("linode", "x") == "unknown" and real.check_ready("linode", "x") == {"state": "unknown"}

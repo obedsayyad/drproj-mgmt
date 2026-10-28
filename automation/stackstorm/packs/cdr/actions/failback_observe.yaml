@@ -1,0 +1,13 @@
+---
+name: failback_observe
+pack: cdr
+description: "Failback: observe one ramp step (policy failback observation seconds) and evaluate the PromQL gates against the incident baseline (real adapter only)."
+runner_type: python-script
+entry_point: failback_observe.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 600}
+  operation_id: {type: string, required: true}
+  lease_generation: {type: integer, required: true}
+  step_percent: {type: integer, required: true, minimum: 1, maximum: 100}
+  poll_seconds: {type: integer, default: 10}

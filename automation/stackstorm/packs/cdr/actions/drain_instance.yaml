@@ -1,7 +1,7 @@
 ---
 name: drain_instance
 pack: cdr
-description: "SIMULATED drain bounded by policy scale_in.drain_timeout_seconds; a timeout is a result, never a delete."
+description: "Drain (simulation adapter, or HAProxy state drain + show servers conn polling on the real adapter) bounded by policy scale_in.drain_timeout_seconds; a timeout is a result, never a delete."
 runner_type: python-script
 entry_point: drain_instance.py
 enabled: true
@@ -10,5 +10,6 @@ parameters:
   lease_generation: {type: integer, required: true}
   provider: {type: string, required: true}
   resource_id: {type: string, required: true}
+  slot_key: {type: string, default: ''}
   timeout_seconds: {type: integer}
   poll_seconds: {type: integer, default: 2}

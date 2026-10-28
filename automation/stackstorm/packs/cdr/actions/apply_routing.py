@@ -1,22 +1,40 @@
-"""Apply a routing change. SIMULATED in P4: the database projection and the simulation adapter's routing map change; HAProxy
-is not touched (the runtime-API implementation is P6, and the real adapter reports not_implemented).
+"""Apply a routing change.
 
-target is 'primary' (modes: maint, normal), 'warm' (the bound warm-role standby: `warm`, else an interim-warm slot; none bound is
-applied=false, not an error) or a slot key (modes: none, backup, active, draining). The projection is written
-first (it validates readiness under the lease), then assert_lease runs immediately before the adapter call.
+Simulation adapter: the database projection and the simulation adapter's routing map change; HAProxy is not touched.
+Real adapter (adapter_mode real): the change is applied on the HAProxy be_app server lines through the Runtime API (lib/haproxy_admin.py,
+lib/haproxy_routing.py). Each command is preceded by assert_lease and followed by a membership dump and an ops audit record.
+
+target is 'lb' (modes normal | overflow | ramp (step_percent) | primary_failure), 'primary' (modes: maint, normal), 'warm' (the bound
+warm-role standby: `warm`, else an interim-warm slot; none bound is applied=false, not an error) or a slot key (modes: none, backup,
+active, draining). The projection is written first (it validates readiness under the lease), then assert_lease runs immediately
+before the adapter call.
 """
 import providers
 from cdr_common import advance, guarded
 from cdr_db import call
 from lease_keeper import fenced
+from routing_bind import bind, serving_lines, slot_ip
 from st2common.runners.base_action import Action
+
+LB_MODES = ("normal", "overflow", "ramp", "primary_failure")
 
 
 class ApplyRouting(Action):
     @guarded
-    def run(self, operation_id, lease_generation, target, mode, slot_generation=0, weight=None):
+    def run(self, operation_id, lease_generation, target, mode, slot_generation=0, weight=None, step_percent=None):
         adapter = providers.load(self.config)
-        if target == "primary":
+        extra = {}
+        if target == "lb":
+            if mode not in LB_MODES or (mode == "ramp" and step_percent is None):
+                return False, "bad_argument"
+            if mode == "ramp":
+                extra["step_percent"] = step_percent
+            if not adapter.simulated:
+                ok, serving = serving_lines(self.config)
+                if not ok:
+                    return False, serving
+                extra["serving"] = serving
+        elif target == "primary":
             if mode not in ("maint", "normal"):
                 return False, "bad_argument"
         else:
@@ -32,9 +50,15 @@ class ApplyRouting(Action):
             ok, out = call(self.config, "SELECT ops.set_routing(%s::uuid, %s, %s, %s, %s, %s)", (operation_id, lease_generation, target, slot_generation, mode, weight))
             if not ok:
                 return False, out
-        fenced(self.config, operation_id, lease_generation, lambda: adapter.set_routing(target, mode))
+            if not adapter.simulated and mode == "active" and target.startswith("elastic-"):
+                ok, ip = slot_ip(self.config, target)
+                if not ok:
+                    return False, ip
+                extra["ip"] = ip
+        bind(self.config, adapter, operation_id, lease_generation)
+        fenced(self.config, operation_id, lease_generation, lambda: adapter.set_routing(target, mode, **extra))
         ok, out = advance(self.config, operation_id, "operation.step.completed", f"routing_{target}_{mode}",
-                          message=f"routing {target} -> {mode}" + (" (simulated)" if adapter.simulated else ""))
+                          message=f"routing {target} -> {mode}" + (" (simulated)" if adapter.simulated else " (real)"))
         if not ok:
             return False, out
-        return True, {"applied": True, "target": target, "mode": mode, "simulated": adapter.simulated}
+        return True, {"applied": True, "target": target, "mode": mode, "simulated": adapter.simulated, "adapter_mode": adapter.mode}

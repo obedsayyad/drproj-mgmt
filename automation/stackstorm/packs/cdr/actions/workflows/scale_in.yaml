@@ -119,6 +119,7 @@ tasks:
       lease_generation: <% ctx().generation %>
       provider: <% ctx().provider %>
       resource_id: <% ctx().resource_id %>
+      slot_key: <% ctx().slot_key %>
     next:
       - when: <% succeeded() and result().result.result = 'drained' %>
         do: route_off

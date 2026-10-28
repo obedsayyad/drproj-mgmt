@@ -101,7 +101,7 @@ Behaviour is in docs/04 (warm standby repair, "As implemented") and docs/07 ("Re
 - Simulation additions: per-resource `power` and `app_broken` (`SimulationAdapter.set_resource`), `power_on`, `pinned_digest`, the fault `prometheus_reload_fail`, and the simulated Prometheus files (`<simulation_state_dir>/prometheus/prometheus.yml` and `prometheus.loaded.yml`).
 - `cdr.apply_policy` (workflow): `policy_validate` -> (lease only when capacity limits change) -> `policy_compile` -> `policy_verify` -> `policy_activate`; any failure `policy_rollback` then `fail_operation`. Pack settings `policy_compile` (`simulation` | `real`, required, no default),
   `prometheus_config_path` (real). `lib/prom_render.py` (stdlib; `tests/compose/promtool.sh` uses it), `lib/prom_target.py`, `lib/policy_scope.py` (what a change touches; HAProxy, k6, Prometheus rule thresholds and StackStorm timers fail `not_implemented`).
-- Skeletons `failback`, `start_load_test`, `stop_load_test`, `create_backup`, `verify_backup`, `restore_application`: every planned step is a `cdr.not_implemented` task; the first fails the operation with `outcome.error: not_implemented` and the step; no lease, slot, routing or provider call.
+- Skeletons `start_load_test`, `stop_load_test`, `create_backup`, `verify_backup`, `restore_application`: every planned step is a `cdr.not_implemented` task; the first fails the operation with `outcome.error: not_implemented` and the step; no lease, slot, routing or provider call.
 - Reconcile additions: standby repair and surplus-interim scale-in intents (`intents`), dead or stale `apply_policy` (`policy_failed`).
 - Per-kind capacity guards now cover `standby_repair` and `apply_policy`; the heavy wrapper is unchanged.
 - Tests: `tests/test_p44_actions.py` (real Postgres, real simulation adapter, fake StackStorm API), `tests/test_workflow_p44.py` (Orquesta conductor over the real YAML, including the skeletons). Live: `tests/compose/t27-t36-local.sh` (T27 a-d, T36, apply_policy, skeletons;
@@ -127,7 +127,7 @@ Workflows (Orquesta, `actions/workflows/`, ref = operation kind unless noted):
 | `cdr.standby_repair` | warm standby repair, interim warm | P4.4 |
 | `cdr.apply_policy` | policy activation (Prometheus label, caps) | P4.4 (rest P6) |
 | `cdr.provision_and_deploy`, `cdr.provision_attempt` | sub-workflows (not operation kinds in the API except provision_and_deploy) | P4.2 |
-| `cdr.failback` | skeleton, fails `not_implemented` | P6 |
+| `cdr.failback` | real adapter: probes, weight 0, ready, ramp 10/50/100 gated on PromQL; simulation: fails `not_implemented` at `direct_probes` before any lease | P6.2 |
 | `cdr.start_load_test`, `cdr.stop_load_test` | skeleton, fails `not_implemented` | P6/P8 |
 | `cdr.create_backup`, `cdr.verify_backup`, `cdr.restore_application` | skeleton, fails `not_implemented` | P7 |
 
@@ -140,7 +140,8 @@ Actions (python-script, `actions/*.py`):
 | Provisioning | `start_attempt`, `provider_create`, `adopt_attempt`, `run_heavy`, `wait_ready`, `finish_attempt`, `provider_cleanup`, `plan_next_attempt`, `delete_slot_resource` |
 | Standby | `standby_classify`, `standby_window`, `standby_verify`, `provider_power_on`, `standby_unhealthy` (simulation producer) |
 | Policy | `policy_validate`, `policy_compile`, `policy_verify`, `policy_activate`, `policy_rollback` |
-| Routing and drain (simulated until P6) | `apply_routing`, `drain_instance` |
+| Routing and drain (simulation: projection only; real: HAProxy Runtime API, P6.2) | `apply_routing`, `drain_instance` |
+| Failback and baseline (real adapter only) | `failback_probe`, `failback_wait_up`, `failback_observe`, `capture_baseline` |
 | Operations and incidents | `open_operation`, `update_ops_state`, `fail_operation`, `open_incident`, `resolve_incident`, `supersede_queued`, `control_state`, `not_implemented` |
 | Reconcile and intents | `reconcile_pass`, `dispatch`, `alert_intent`, `record_alert` |
 | Other | `adapter_info`, `keepalive` |
@@ -157,3 +158,9 @@ Pack settings (`config.schema.yaml`): `supabase_ops_url`, `provider_adapter` (re
 ## Restore probe (T18 heavy half)
 
 `cdr.restore_probe` (operator-started, never scheduled) opens a `reconcile`-kind operation (the kinds are fixed by `ops.open_operation`; a dedicated backup kind arrives with P7), takes the capacity lease and runs `cdr.run_heavy` task `restore_probe`: `pg_dump -Fc -n app` from `backup_db_url`, `pg_restore` into a scratch database on `restore_test_url` (the `restore-test` profile container), table sets and row counts compared, scratch database dropped, dump deleted. Credentials go to the tools as `PG*` variables of a minimal environment, never argv; only short codes and counts are returned. It never touches the live app schema and is not the P7 restore.
+
+## Real HAProxy routing adapter (P6.2)
+
+- `lib/haproxy_admin.py` (mTLS client, allowlist mirror, `show servers state|conn` parsers, membership store), `lib/haproxy_routing.py` (modes, ramp weights, server-line mapping, fenced `Router`), `lib/routing_bind.py` (assert_lease and `ops.record_haproxy_command` hooks), `lib/promql.py` (failback gates), `lib/failback_lib.py`.
+- Pack setting `real_adapter.haproxy` (`admin_addr`, `client_cert`, `client_key`, `ca_bundle`, `state_dir`; paths only). Without it the real adapter refuses routing. `prometheus_url` is also used by the failback gates.
+- Tests: `tests/test_haproxy_admin.py` (fake TLS fe_admin; needs the `openssl` CLI and, for the audit tests, `TEST_DATABASE_URL`), `tests/test_workflow_failback.py`, `tests/test_live_lb_check.py`. The live read-only check against the real LB is `tests/live/live_lb_check.py` (run on the management VM inside `st2actionrunner`; it is not collected by pytest).
