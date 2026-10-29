@@ -30,6 +30,12 @@ def q_cpu(primary_ip, w="60s"):
     return f'100 * (1 - avg(rate(node_cpu_seconds_total{{role="app",mode="idle",instance=~"{primary_ip}:.*"}}[{w}])))'
 
 
+def q_fleet_cpu(w="30s"):
+    """The CdrCpuHigh/CdrCpuLow expression (monitoring/rules/cdr.yml): CPU of the serving members, vCPU-weighted."""
+    sel = f'rate(node_cpu_seconds_total{{role=~"app|cloud",mode="idle"}}[{w}]) and on(instance) (cdr_member_serving == 1)'
+    return f"100 * (1 - sum({sel}) / count({sel}))"
+
+
 def q_fresh():
     return f'max(timestamp({RESP.format(extra="")}))'
 

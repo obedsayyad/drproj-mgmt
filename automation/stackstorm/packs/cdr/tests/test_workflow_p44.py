@@ -410,3 +410,39 @@ def test_start_load_test_k6_failure_fails_the_operation():
 def test_stop_load_test_kills_k6_and_succeeds():
     status, ran = drive("stop_load_test", {"operation_id": OP}, {"cdr.load_test": py({"run_id": "r1", "stopped": True})})
     assert events_of(ran)[-1] == "operation.succeeded" and [i["task"] for _n, a, i in ran if a == "cdr.load_test"] == ["stop"]
+
+
+# ------------------------------------------------------------------ overload-only recovery inside scale_in (T26, P6.3)
+RECOVER_GATE = py({"proceed": False, "noop_reason": "no_candidate", "recover_warm": True, "warm_slot": "warm", "metrics_source": "prometheus"})
+
+
+def recover(observe, **kw):
+    from test_workflow_p43 import run as run_p43
+
+    results = {"cdr.scale_in_gate": RECOVER_GATE, "cdr.apply_routing": py({"applied": True, "target": "warm", "mode": "backup", "simulated": False}), "cdr.overflow_observe": observe}
+    return run_p43("scale_in", results=results, **kw)
+
+
+def routing_modes(ran):
+    return [(i["target"], i["mode"]) for _n, a, i in ran if a == "cdr.apply_routing"]
+
+
+def test_overload_only_recovery_returns_the_warm_standby_to_backup_and_deletes_nothing():
+    status, ran = recover(py({"regressed": False, "cpu_percent": 3.1}))
+    assert routing_modes(ran) == [("warm", "backup")]
+    assert last_outcome(ran, "operation.succeeded")["outcome"]["recovered"] is True
+    assert names(ran)[-1] == "release" and released_with_generation(ran)
+    assert not set(ran_actions(ran)) & {"cdr.run_heavy", "cdr.delete_slot_resource", "cdr.begin_slot_release", "cdr.drain_instance"}
+
+
+def test_overload_only_recovery_reverts_to_overflow_on_regression():
+    status, ran = recover(py({"regressed": True, "reason": "cpu_high", "cpu_percent": 71.0}))
+    assert routing_modes(ran) == [("warm", "backup"), ("warm", "active")]
+    out = last_outcome(ran, "operation.succeeded")["outcome"]
+    assert out["recovered"] is False and out["reverted_to_overflow"] is True and out["observation"]["reason"] == "cpu_high"
+    assert names(ran)[-1] == "release"
+
+
+def test_overload_only_recovery_reverts_when_the_observation_itself_fails():
+    status, ran = recover(py({}), fail="recover_observe")
+    assert routing_modes(ran) == [("warm", "backup"), ("warm", "active")] and names(ran)[-1] == "release"

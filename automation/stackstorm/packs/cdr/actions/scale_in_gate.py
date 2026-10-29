@@ -1,7 +1,8 @@
 """Recheck under the lock before scale-in (docs/04): maintenance, primary outage (T22), stale metrics, remaining capacity,
 candidate (routing_mode tells the workflow whether it has anything to drain: a slot routed `none`, e.g. a surplus interim standby, goes
 straight to its release). proceed=false carries the noop_reason for a succeeded no-op. The candidate is the newest bound elastic slot
-(ops.scale_in_candidate); the warm, interim-warm and primary are never candidates.
+(ops.scale_in_candidate); the warm, interim-warm and primary are never candidates. With no candidate and the warm standby still routed
+active (overload relief by activate_standby), recover_warm=true tells the workflow to return it to backup (overload-only recovery, T26).
 
 Primary outage = an open `primary.unhealthy:*` incident, or a non-terminal primary_failure/failback operation. Low traffic
 during an outage never removes cloud redundancy.
@@ -71,6 +72,18 @@ class ScaleInGate(Action):
         if not ok:
             return False, rows
         if not rows:
+            # Overload-only recovery (docs/04): no elastic VM left, primary stable (the outage check above) and the warm standby still serving
+            # as overflow -> the workflow returns it to backup instead of ending a no-op.
+            ok, warm = call(
+                self.config,
+                "SELECT c.key, c.generation FROM ops.capacity_slots c JOIN ops.instances i ON i.id = c.bound_instance_id"
+                " WHERE c.role = 'warm' AND c.state = 'bound' AND i.lifecycle_state = 'ready' AND i.routing_mode = 'active' LIMIT 1",
+                (),
+            )
+            if not ok:
+                return False, warm
+            if warm:
+                return True, {"proceed": False, "noop_reason": "no_candidate", "recover_warm": True, "warm_slot": warm[0][0], "metrics_source": m["source"]}
             return True, {"proceed": False, "noop_reason": "no_candidate"}
         key, generation, provider, resource_id, routing_mode = rows[0]
         return True, {"proceed": True, "slot_key": key, "slot_generation": generation, "provider": provider, "resource_id": resource_id or "",

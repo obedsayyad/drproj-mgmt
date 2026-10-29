@@ -16,6 +16,7 @@ vars:
   - resource_id: ''
   - evidence: {}
   - routing_mode: ''
+  - recovery: {}
 tasks:
   adapter:
     action: cdr.adapter_info
@@ -91,7 +92,11 @@ tasks:
           - resource_id: <% result().result.resource_id %>
           - routing_mode: <% result().result.get('routing_mode', '') %>
         do: routed_or_idle
-      - when: <% succeeded() and not result().result.proceed %>
+      - when: <% succeeded() and not result().result.proceed and result().result.get('recover_warm', false) %>
+        publish:
+          - noop_reason: <% result().result.noop_reason %>
+        do: recover_route
+      - when: <% succeeded() and not result().result.proceed and not result().result.get('recover_warm', false) %>
         publish:
           - noop_reason: <% result().result.noop_reason %>
         do: noop_release
@@ -106,6 +111,10 @@ tasks:
         do: begin_release
       - when: <% succeeded() and ctx().routing_mode != 'none' %>
         do: mark_draining
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
   mark_draining:
     action: cdr.apply_routing
     input:
@@ -350,6 +359,86 @@ tasks:
       status: failed
       message: deletion not confirmed; slot held
       outcome: {error: held_uncertain, slot_key: <% ctx().slot_key %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  recover_route:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: warm
+      mode: backup
+    next:
+      - when: <% succeeded() and result().result.applied %>
+        do: recover_observe
+      - when: <% succeeded() and not result().result.applied %>
+        do: noop_release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  recover_observe:
+    action: cdr.overflow_observe
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+    next:
+      - when: <% succeeded() and not result().result.regressed %>
+        publish:
+          - recovery: <% result().result %>
+        do: recover_done
+      - when: <% succeeded() and result().result.regressed %>
+        publish:
+          - recovery: <% result().result %>
+        do: recover_revert
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: recover_revert
+  recover_revert:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: warm
+      mode: active
+    next:
+      - when: <% succeeded() %>
+        do: recover_reverted
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  recover_reverted:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: recovery_reverted
+      status: succeeded
+      message: warm standby back to overflow (regression while the primary served alone)
+      outcome: {recovered: false, reverted_to_overflow: true, observation: <% ctx().recovery %>, adapter: <% ctx().adapter_mode %>}
+    next:
+      - when: <% succeeded() %>
+        do: release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  recover_done:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: recovered
+      status: succeeded
+      message: warm standby returned to backup; primary alone serves
+      outcome: {recovered: true, observation: <% ctx().recovery %>, adapter: <% ctx().adapter_mode %>}
     next:
       - when: <% succeeded() %>
         do: release
