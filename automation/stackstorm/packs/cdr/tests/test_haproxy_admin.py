@@ -287,6 +287,15 @@ def test_elastic_join_sets_addr_then_ready_and_leave_drains_then_maint():
         hr.plan_slot("primary", "active", m)
 
 
+def test_backup_mode_points_the_pre_declared_line_at_the_instance_before_enabling_it():
+    declared = membership({**base_servers(), "warm_bk": ["0.0.0.0", 8443, 0, MAINT, 100]})
+    assert hr.plan_slot("warm", "backup", declared, ip="10.0.0.7") == [
+        "set server be_app/warm_bk addr 10.0.0.7 port 8443\n", "set server be_app/warm_bk state ready\n"]
+    assert hr.plan_slot("warm", "backup", declared) == ["set server be_app/warm_bk state ready\n"]  # no address known: state only, as before
+    already = membership({**base_servers(), "warm_bk": ["10.0.0.7", 8443, 2, 0, 100]})
+    assert hr.plan_slot("warm", "backup", already, ip="10.0.0.7") == []
+
+
 # ---------------------------------------------------------------- Router: fence, dumps, audit, verification
 class Hooks:
     def __init__(self):

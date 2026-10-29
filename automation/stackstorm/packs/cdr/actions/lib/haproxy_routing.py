@@ -102,6 +102,10 @@ def plan_slot(slot_key, mode, m, ip=None, port=8443):
     elif mode == "backup":
         if bk is None:
             raise AdminError("bad_mode")
+        # The backup line is pre-declared at 0.0.0.0 (docs/08): without the address it is "ready" but can never pass a health check.
+        if ip is not None and (m.get(bk).addr != ip or m.get(bk).port != port):
+            cmds.append(f"set server {hx.BACKEND}/{bk} addr {ip} port {port}\n")
+            m = _with_addr(m, bk, ip, port)
         want[bk] = ("ready", None)
         want[act] = ("maint", None)
     elif mode == "none":

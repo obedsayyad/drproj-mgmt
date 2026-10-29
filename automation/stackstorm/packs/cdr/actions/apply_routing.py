@@ -51,7 +51,7 @@ class ApplyRouting(Action):
             ok, out = call(self.config, "SELECT ops.check_routing(%s::uuid, %s, %s, %s, %s, %s)", (operation_id, lease_generation, target, slot_generation, mode, weight))
             if not ok:
                 return False, out
-            if not adapter.simulated and mode == "active" and target.startswith("elastic-"):
+            if not adapter.simulated and (mode == "backup" or (mode == "active" and not target.startswith("primary"))):
                 ok, ip = slot_ip(self.config, target)
                 if not ok:
                     return False, ip
