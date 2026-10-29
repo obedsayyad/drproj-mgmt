@@ -185,6 +185,37 @@ def test_wait_ready_reports_unknown_when_the_provider_never_answers(db, sim):
     assert make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.1)[1]["result"] == "unknown"
 
 
+class _RealLike:
+    """Simulation answers behind the real adapter's contract: not simulated, readiness only with the address and without a digest."""
+
+    simulated = False
+    mode = "real"
+
+    def __init__(self, inner):
+        self._inner, self.ips = inner, []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def check_ready(self, provider, resource_id, ip=None):
+        self.ips.append(ip)
+        return {"state": "ready", "identity": resource_id} if ip else {"state": "unknown"}
+
+
+def test_wait_ready_real_adapter_probes_the_instance_address_and_takes_the_recorded_digest(db, sim, monkeypatch):
+    import wait_ready
+
+    faults(sim, {"digitalocean": {"ready_after_s": 0}})
+    op, gen, key, sgen, rid = created(db, sim)
+    db.execute("UPDATE ops.instances SET public_ip = '203.0.113.9/32', image_digest = 'sha256:" + "b" * 64 + "' WHERE provider_resource_id = %s", (rid,))
+    real = _RealLike(SimulationAdapter(sim["dir"], None))
+    monkeypatch.setattr(wait_ready.providers, "load", lambda _cfg: real)
+    deadline, cps = deadlines(30, [10, 20, 30])
+    ok, out = make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.05)
+    assert ok and out["result"] == "ready" and out["image_digest"] == "sha256:" + "b" * 64 and out["identity"] == rid
+    assert real.ips == ["203.0.113.9"]
+
+
 def test_run_heavy_asserts_the_lease_before_deploying(db, sim):
     op, gen, key, sgen, rid = created(db, sim)
     assert make(RunHeavy, sim).run("deploy", "heavy", op, gen + 1, "digitalocean", rid) == (False, "lease_lost")

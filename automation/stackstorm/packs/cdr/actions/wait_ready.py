@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import providers
 from cdr_common import advance, guarded, policy_section
+from cdr_db import call
 from lease_keeper import LeaseKeeper
 from st2common.runners.base_action import Action
 
@@ -35,7 +36,19 @@ class WaitReady(Action):
         with LeaseKeeper(self.config, operation_id, lease_generation, coordination["lease_renewal_seconds"]) as keeper:
             while True:
                 keeper.check()
-                check = adapter.check_ready(provider, resource_id)
+                if adapter.simulated:
+                    check = adapter.check_ready(provider, resource_id)
+                else:
+                    # Real adapter: /health/ready is probed at the instance address, and the digest is the one the deploy recorded on the instance
+                    # (the readiness body carries only a short version), so ready needs both. Read per poll: the deploy may finish meanwhile.
+                    ok, rows = call(self.config, "SELECT public_ip::text, image_digest FROM ops.instances WHERE provider = %s AND provider_resource_id = %s"
+                                    " AND lifecycle_state <> 'deleted' ORDER BY created_at DESC LIMIT 1", (provider, resource_id))
+                    if not ok:
+                        return False, rows
+                    ip, digest = (rows[0][0] or "").split("/")[0], rows[0][1] if rows else None
+                    check = adapter.check_ready(provider, resource_id, ip=ip or None)
+                    if check["state"] == "ready":
+                        check = {**check, "image_digest": digest}
                 last = check["state"]
                 if last == "ready" and check.get("image_digest") and check.get("identity"):
                     return True, {"result": "ready", "image_digest": check["image_digest"], "identity": check["identity"], "checkpoints_emitted": emitted}
