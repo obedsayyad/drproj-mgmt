@@ -11,7 +11,7 @@ groups:
       # the age comparison is parenthesized here.
       - alert: CdrServingMemberStale
         expr: |
-          ((time() - timestamp(node_cpu_seconds_total{role="app",mode="idle",cpu="0"})) > 30)
+          ((time() - timestamp(node_cpu_seconds_total{role=~"app|cloud",mode="idle",cpu="0"})) > 30)
             and on(instance) cdr_member_serving == 1
         labels: { severity: critical, cdr_event: metrics.stale }
         annotations:
@@ -20,7 +20,7 @@ groups:
       - alert: CdrServingMemberMissing
         expr: |
           cdr_member_serving == 1
-            unless on(instance) node_cpu_seconds_total{role="app",mode="idle",cpu="0"}
+            unless on(instance) node_cpu_seconds_total{role=~"app|cloud",mode="idle",cpu="0"}
         labels: { severity: critical, cdr_event: metrics.stale }
         annotations:
           summary: "Serving member {{ $labels.instance }} has no CPU series"
@@ -45,16 +45,16 @@ groups:
       # policy-defaults.json: scale_out.cpu_percent 60 for 30 s, scale_in.cpu_percent 20 for 120 s.
       - alert: CdrCpuHigh
         expr: |
-          100 * (1 - sum(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))
-                     / count(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))) > 60
+          100 * (1 - sum(rate(node_cpu_seconds_total{role=~"app|cloud",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))
+                     / count(rate(node_cpu_seconds_total{role=~"app|cloud",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))) > 60
         for: 30s
         labels: { severity: warning, cdr_event: app.cpu.high }
         annotations:
           summary: "Serving fleet CPU is above 60% for 30 s"
       - alert: CdrCpuLow
         expr: |
-          100 * (1 - sum(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))
-                     / count(rate(node_cpu_seconds_total{role="app",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))) < 20
+          100 * (1 - sum(rate(node_cpu_seconds_total{role=~"app|cloud",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))
+                     / count(rate(node_cpu_seconds_total{role=~"app|cloud",mode="idle"}[30s]) and on(instance) (cdr_member_serving == 1))) < 20
         for: 120s
         labels: { severity: info, cdr_event: app.cpu.low }
         annotations:

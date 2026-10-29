@@ -169,11 +169,12 @@ tests:
     interval: 5s
     input_series:
       # a (serving) is busy 80%: idle grows 0.2 per second. b (serving) is busy 60%: idle grows 0.4. c is an idle warm standby, not serving.
-      - series: 'node_cpu_seconds_total{instance="a:9100",role="app",mode="idle",cpu="0"}'
+      # (a is a cloud VM: the cloud node targets carry role="cloud", the primary's role="app"; both are fleet members.)
+      - series: 'node_cpu_seconds_total{instance="a:9100",role="cloud",mode="idle",cpu="0"}'
         values: '0+1x40'
       - series: 'node_cpu_seconds_total{instance="b:9100",role="app",mode="idle",cpu="0"}'
         values: '0+2x40'
-      - series: 'node_cpu_seconds_total{instance="c:9100",role="app",mode="idle",cpu="0"}'
+      - series: 'node_cpu_seconds_total{instance="c:9100",role="cloud",mode="idle",cpu="0"}'
         values: '0+5x40'
       - series: 'cdr_member_serving{instance="a:9100",role="elastic"}'
         values: '1+0x40'
