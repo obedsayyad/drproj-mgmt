@@ -126,6 +126,7 @@ DOCKER_INPUTS = {"versions": {"docker": "29.5.2"}}
 
 @pytest.mark.parametrize("distribution,release,base", [
     ("Debian", "bookworm", "https://download.docker.com/linux/debian"),
+    ("Debian", "trixie", "https://download.docker.com/linux/debian"),
     ("Ubuntu", "jammy", "https://download.docker.com/linux/ubuntu"),
 ])
 def test_docker_repository_follows_the_distribution(rendered, distribution, release, base):
@@ -135,3 +136,13 @@ def test_docker_repository_follows_the_distribution(rendered, distribution, rele
     assert t.template("{{ bootstrap_docker_repo_base }}") == base
     assert t.template("{{ bootstrap_docker_pin }}") == "5:29.5.2-*"
     assert t.template("{{ bootstrap_docker_repo_base }}/gpg").startswith(base)
+
+
+def test_docker_apt_suite_line_uses_distribution_release():
+    import yaml
+    tasks = yaml.safe_load(open(os.path.join(ROOT, "roles/bootstrap/tasks/main.yml")))
+    repo = next(t for t in tasks if t["name"] == "Add the Docker apt repository")["ansible.builtin.apt_repository"]["repo"]
+    assert "{{ ansible_facts['distribution_release'] }} stable" in repo and "bookworm" not in repo and "trixie" not in repo
+    check = next(t for t in tasks if t["name"] == "Check the inputs this role needs")["ansible.builtin.assert"]["that"]
+    guard = next(c for c in check if "distribution_major_version" in c)
+    assert "in ['12', '13']" in guard

@@ -18,8 +18,8 @@
       - mgmt_overview.json.integrations.supabase.state == 'fresh'
       - mgmt_overview.json.integrations.stackstorm.state == 'fresh'
       - mgmt_overview.json.integrations.prometheus.state == 'fresh'
-      # No provider tokens exist: a recorded failed/old reconcile is stale or unavailable, never fresh.
-      - mgmt_overview.json.integrations.providers.state in ['unavailable', 'stale']
+      # Without provider tokens a recorded failed/old reconcile is stale or unavailable, never fresh; with providers.env the reconcile may be fresh.
+      - mgmt_overview.json.integrations.providers.state in (['unavailable', 'stale', 'fresh'] if mgmt_providers_env.stat.exists else ['unavailable', 'stale'])
       # The haproxy probe judges the `haproxy` Prometheus job (P6.1): fresh once the ops image carrying the probe is deployed, otherwise "not probed".
       - mgmt_overview.json.integrations.haproxy.state in ['fresh', 'unavailable']
     fail_msg: "unexpected integration states: {{ mgmt_overview.json.integrations | to_json }}"

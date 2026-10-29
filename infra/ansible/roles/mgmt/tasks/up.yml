@@ -104,10 +104,16 @@
   when: mgmt_key_created | bool
 
 # The 60 s reconcile timer stays off until provider tokens exist (docs/15 §8); the 6 h keep-alive timer stays on.
-- name: Disable the 60 s reconcile rule
+# Once providers.env exists the rule's state is the operator's (enabled after a successful manual reconcile), so a rerun leaves it alone.
+- name: Look for the provider environment file
+  ansible.builtin.stat:
+    path: "{{ mgmt_host_secrets_dir }}/providers.env"
+  register: mgmt_providers_env
+
+- name: Disable the 60 s reconcile rule (only while no provider tokens are installed)
   ansible.builtin.command:
     argv: ["{{ mgmt_st2_script }}", rule, disable, cdr.reconcile_every_60s]
-  when: not ansible_check_mode
+  when: not ansible_check_mode and not mgmt_providers_env.stat.exists
   changed_when: true
 
 # Grafana stores the admin password in its DB after first start; GF_SECURITY_ADMIN_PASSWORD__FILE does not update it later.

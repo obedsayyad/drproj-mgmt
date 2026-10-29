@@ -6,7 +6,8 @@ bootstrap_ssh_key_path: >-
   {{ hostvars[inventory_hostname].ansible_ssh_private_key_file
      | default(inputs.hosts[drproj_role | default('management')].ssh_key_reference) }}
 bootstrap_docker_version: "{{ inputs.versions.docker }}"
-# Debian 12 (bookworm) and Ubuntu both use download.docker.com/linux/<distribution>; the glob matches 5:<v>-1~debian.12~bookworm and the Ubuntu form.
+# Debian 12 (bookworm), Debian 13 (trixie) and Ubuntu use download.docker.com/linux/<distribution>; the suite line comes from ansible_facts['distribution_release'].
+# The glob matches 5:<v>-1~debian.12~bookworm, 5:<v>-1~debian.13~trixie and the Ubuntu form.
 bootstrap_docker_repo_base: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}"
 bootstrap_docker_pin: "5:{{ bootstrap_docker_version }}-*"
 bootstrap_node_exporter_port: "{{ inputs.ports.node_exporter }}"

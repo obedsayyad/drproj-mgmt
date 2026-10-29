@@ -26,8 +26,19 @@ SSH_KEY_ENV = "CLOUD_VM_SSH_KEY_FILE"
 DEFAULT_USER = "root"
 
 
+# The runner image's system python3 has no PostgreSQL driver; the runner image's ansible venv (/opt/ansible) does. Ansible executes this file through its shebang,
+# so fall back to that interpreter (same arguments, same environment) when the import fails.
+ANSIBLE_VENV_PYTHON = "/opt/ansible/bin/python"
+
+
 def fetch(url):
-    import psycopg
+    try:
+        import psycopg
+    except ImportError:
+        py = os.environ.get("CLOUD_APP_PYTHON", ANSIBLE_VENV_PYTHON)
+        if os.path.realpath(py) == os.path.realpath(sys.executable) or not os.access(py, os.X_OK):
+            raise
+        os.execv(py, [py, *sys.argv])
 
     with psycopg.connect(url, connect_timeout=10, autocommit=True) as conn:
         return conn.execute(QUERY).fetchall()

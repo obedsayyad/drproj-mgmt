@@ -7,8 +7,8 @@
       - bootstrap_docker_version is string
       - bootstrap_docker_version | length > 0
       - ansible_facts['distribution'] in ['Debian', 'Ubuntu']
-      - ansible_facts['distribution'] != 'Debian' or ansible_facts['distribution_major_version'] == '12'
-    fail_msg: "versions.docker must be set in the deployment inputs, and the host must be Debian 12 or Ubuntu"
+      - ansible_facts['distribution'] != 'Debian' or ansible_facts['distribution_major_version'] in ['12', '13']
+    fail_msg: "versions.docker must be set in the deployment inputs, and the host must be Debian 12, Debian 13 or Ubuntu"
     quiet: true
   tags: [bootstrap, always]
 

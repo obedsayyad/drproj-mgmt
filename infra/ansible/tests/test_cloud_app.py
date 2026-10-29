@@ -54,3 +54,33 @@ def test_a_database_error_is_a_hard_failure_never_an_empty_inventory(monkeypatch
 def test_missing_url_is_a_failure(monkeypatch, capsys):
     monkeypatch.delenv("DR_AUTOMATION_URL", raising=False)
     assert inv.main(["--list"]) == 1
+
+
+def test_fetch_reexecs_under_the_ansible_venv_python_when_the_driver_is_missing(monkeypatch, tmp_path):
+    import builtins
+    import sys
+
+    real_import = builtins.__import__
+
+    def no_psycopg(name, *a, **k):
+        if name == "psycopg":
+            raise ImportError(name)
+        return real_import(name, *a, **k)
+
+    py = tmp_path / "python"
+    py.write_text("#!/bin/sh\n")
+    py.chmod(0o755)
+    seen = {}
+
+    def fake_execv(path, argv):
+        seen.update(path=path, argv=argv)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(builtins, "__import__", no_psycopg)
+    monkeypatch.setenv("CLOUD_APP_PYTHON", str(py))
+    monkeypatch.setattr(inv.os, "execv", fake_execv)
+    try:
+        inv.fetch("postgresql://x")
+    except SystemExit:
+        pass
+    assert seen["path"] == str(py) and seen["argv"] == [str(py), *sys.argv]
