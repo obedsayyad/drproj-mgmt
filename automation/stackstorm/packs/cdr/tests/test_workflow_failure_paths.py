@@ -65,6 +65,7 @@ HAPPY = {
     "cdr.update_ops_state": py({"sequence": 1}),
     "cdr.acquire_lease": py({"acquired": True, "generation": GEN, "previous_holder": None, "previous_expired": False}),
     "cdr.capacity_gate": py({"proceed": True, "metrics_source": "simulation"}),
+    "cdr.wait_lease": py({"acquired": True, "generation": GEN, "previous_holder": None, "previous_expired": False}),
     "cdr.unrouted_elastic": py({"found": False}),
     "cdr.apply_routing": py({"applied": True, "target": "elastic-linode-1", "mode": "active", "simulated": True}),
     "cdr.next_elastic_provider": py({"provider": "linode", "skipped": [], "simulated": True, "adapter_mode": "simulation"}),
