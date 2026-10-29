@@ -40,10 +40,12 @@ export function createOpsMetrics(pool: pg.Pool, now: () => number = Date.now) {
     await Promise.all([
       attempt(async () => {
         const r = await pool.query<{ id: string; provider: string; role: string; public_ip: string | null; serving: boolean }>(
-          `SELECT id, provider, role, public_ip, (routing_mode = 'active' AND routing_weight > 0) AS serving
+          `SELECT id, provider, role, public_ip,
+                  ((routing_mode = 'active' AND routing_weight > 0)
+                   OR (role = 'primary' AND lifecycle_state = 'ready' AND NOT EXISTS (SELECT 1 FROM ops.incidents WHERE state = 'open' AND fingerprint = 'primary.unhealthy:relief'))) AS serving
            FROM ops.instances WHERE lifecycle_state <> 'deleted'`,
         );
-        const serving = gauge('cdr_member_serving', '1 when the instance is routed as active with weight > 0', ['instance_id', 'provider', 'role', 'instance']);
+        const serving = gauge('cdr_member_serving', '1 when the instance serves traffic: routed active with weight > 0, or the primary while ready and no open primary.unhealthy incident (its HAProxy routing is not projected into ops.instances)', ['instance_id', 'provider', 'role', 'instance']);
         for (const row of r.rows) {
           serving.set({ instance_id: row.id, provider: row.provider, role: row.role, instance: row.public_ip ? `${row.public_ip}:${NODE_EXPORTER_PORT}` : '' }, row.serving ? 1 : 0);
         }

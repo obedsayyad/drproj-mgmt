@@ -29,6 +29,9 @@ scrape_configs:
 
   # Internal-only listener (OPS_METRICS_PORT); not published and not routed through Caddy.
   - job_name: ops
+    # cdr_member_serving carries the fleet member's node_exporter address as its own `instance` label (the join key of the CPU/serving rules):
+    # keep it instead of renaming it exported_instance and replacing it with ops:9465.
+    honor_labels: true
     static_configs:
       - targets: ["ops:9465"]
         labels: { role: management }

@@ -56,7 +56,7 @@ class LoadTest(Action):
         if task == "wait":
             return self._wait(t, run_id, duration_seconds)
         if task == "stop":
-            ok, rows = cdr_db.call(self.config, ACTIVE_SQL)
+            ok, rows = cdr_db.call(self.config, ACTIVE_SQL, ())
             if not ok:
                 return False, rows
             if not rows:

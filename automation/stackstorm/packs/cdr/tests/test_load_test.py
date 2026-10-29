@@ -114,3 +114,20 @@ def test_wait_deadline_kills_k6(monkeypatch):
     monkeypatch.setattr(action_mod.time, "monotonic", lambda: next(ticks))
     ok, res = wait(monkeypatch, f)
     assert f.stopped and res["error"] == "timeout"
+
+
+def test_stop_marks_the_active_run_cancelling_then_kills_k6(monkeypatch):
+    """The stop task reads the one non-terminal run (cdr_db.call takes a params tuple), projects cancelling, then sends the stop verb."""
+    sent, projected = [], []
+    monkeypatch.setattr(action_mod.cdr_db, "call", lambda cfg, sql, params: (True, [("run-1", "running")]) if "FROM ops.test_runs" in sql else (False, "unexpected"))
+    monkeypatch.setattr(K6Host, "stop", lambda self: sent.append("stop"))
+    a = action_mod.LoadTest(config={"testing_ssh": {"host": "203.0.113.9", "user": "root", "key": "/k"}})
+    monkeypatch.setattr(a, "_project", lambda rid, st, summary=None: projected.append((rid, st)) or (True, "x"))
+    ok, res = a.run("stop", "op-1")
+    assert ok and res == {"run_id": "run-1", "stopped": True} and projected == [("run-1", "cancelling")] and sent == ["stop"]
+
+
+def test_stop_without_an_active_run_fails_not_running(monkeypatch):
+    monkeypatch.setattr(action_mod.cdr_db, "call", lambda cfg, sql, params: (True, []))
+    a = action_mod.LoadTest(config={"testing_ssh": {"host": "203.0.113.9", "user": "root", "key": "/k"}})
+    assert a.run("stop", "op-1") == (False, "test_not_running")
