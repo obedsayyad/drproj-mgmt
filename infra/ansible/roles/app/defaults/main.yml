@@ -28,6 +28,10 @@ app_instance_label: >-
   {{ 'Main server' if app_instance_role == 'primary' else ('Backup server' if app_instance_role == 'warm'
      else 'Extra server ' ~ ((slot_key | default('')) | regex_search('[0-9]+$') | default('', true))) | trim }}
 app_provider_region: "{{ (inputs.cloud_application[app_instance_provider] | default({})).region | default('') }}"
+# Self-hosted hosts: "<City>, <Country>" from a deploy-time lookup of the host's public IP (tasks/main.yml); empty when it fails (shown as just
+# "self-hosted", never guessed). Cloud VMs: provider region + city.
+app_region_lookup_ip: "{{ inputs.hosts.primary.public_ip if 'primary' in group_names else '' }}"
+app_lookup_region: ""
 app_instance_region: >-
-  {{ (inputs.hosts.primary.location | default('self-hosted (Pune DC)', true)) if app_instance_provider == 'self_hosted'
+  {{ app_lookup_region if app_instance_provider == 'self_hosted'
      else (app_provider_region ~ (' (' ~ app_region_names[app_provider_region] ~ ')' if app_provider_region in app_region_names else '')) }}

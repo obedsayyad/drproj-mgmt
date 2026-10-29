@@ -26,6 +26,24 @@
     quiet: true
   tags: [app, config]
 
+- name: Look up the city of a self-hosted host's public IP (one GET to ipinfo.io from the controller; empty on any failure)
+  ansible.builtin.command:
+    argv: ["python3", "{{ role_path }}/files/region_lookup.py", "{{ app_region_lookup_ip }}"]
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: app_region_result
+  when: app_instance_provider == 'self_hosted' and app_region_lookup_ip | length > 0
+  tags: [app, config]
+
+- name: Keep the looked-up place (unset means unknown)
+  ansible.builtin.set_fact:
+    app_lookup_region: "{{ (app_region_result.stdout | default('')) | trim if (app_region_result.rc | default(1)) == 0 else '' }}"
+  when: app_region_result is not skipped
+  tags: [app, config]
+
 - name: Create the stack directories
   ansible.builtin.file:
     path: "{{ item }}"
