@@ -18,6 +18,10 @@ bootstrap_config_dir: /etc/drproj
 # node_exporter basic-auth password: generated on the host on first run into this 0600 file under the secrets dir; only its bcrypt hash goes
 # into the web config. Never read from the controller, never logged.
 bootstrap_node_exporter_password_file: "{{ bootstrap_config_dir }}/secrets/node-exporter-basic-auth-password"
+# True for cloud VMs (group_vars/cloud_app.yml): the node_exporter basic-auth password is the management scrape password from the environment,
+# not a per-host random one. Fixed hosts generate their own.
+bootstrap_node_exporter_shared_password: false
+bootstrap_node_exporter_scrape_password: "{{ lookup('ansible.builtin.env', 'NODE_EXPORTER_BASIC_AUTH_PASSWORD') }}"
 # Ansible venv on the management VM (same ansible-core and collection pins as automation/runner/Dockerfile and requirements.yml).
 bootstrap_ansible_venv: /opt/drproj/ansible-venv
 bootstrap_ansible_core_version: "{{ inputs.versions.ansible }}"

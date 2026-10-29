@@ -12,3 +12,7 @@ ansible_user: "{{ bootstrap_deploy_user }}"
 # sshd as the provider image configured it (the self-hosted fixed hosts keep the full hardening).
 bootstrap_authorize_from_connecting_user: true
 bootstrap_harden_sshd: false
+
+# Prometheus scrapes every node_exporter with the one password kept on management; the runner hands it to the playbook as
+# NODE_EXPORTER_BASIC_AUTH_PASSWORD. Cloud VMs adopt it instead of generating their own (the fixed primary keeps its own, read once by management).
+bootstrap_node_exporter_shared_password: true

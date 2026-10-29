@@ -146,3 +146,8 @@ def test_docker_apt_suite_line_uses_distribution_release():
     check = next(t for t in tasks if t["name"] == "Check the inputs this role needs")["ansible.builtin.assert"]["that"]
     guard = next(c for c in check if "distribution_major_version" in c)
     assert "in ['12', '13']" in guard
+
+
+def test_cloud_vms_adopt_the_shared_scrape_password_and_fixed_hosts_keep_their_own(rendered):
+    assert str(rendered("i-1")[0]["templar"].template("{{ bootstrap_node_exporter_shared_password }}")) == "True"
+    assert str(rendered("primary-vm")[0]["templar"].template("{{ bootstrap_node_exporter_shared_password }}")) == "False"

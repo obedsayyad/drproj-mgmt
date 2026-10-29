@@ -245,13 +245,28 @@
       ansible.builtin.stat:
         path: "{{ bootstrap_node_exporter_password_file }}"
       register: bootstrap_password_file
+    - name: Install the shared scrape password (cloud VMs; 0600, secrets directory only)
+      ansible.builtin.copy:
+        content: "{{ bootstrap_node_exporter_scrape_password }}"
+        dest: "{{ bootstrap_node_exporter_password_file }}"
+        owner: "{{ bootstrap_deploy_user }}"
+        group: "{{ bootstrap_deploy_user }}"
+        mode: "0600"
+      register: bootstrap_shared_password
+      no_log: true
+      when: bootstrap_node_exporter_shared_password | bool and bootstrap_node_exporter_scrape_password | length > 0
+    - name: Remember whether the shared password replaced the host's own
+      ansible.builtin.set_fact:
+        bootstrap_password_rotated: "{{ bootstrap_shared_password is changed }}"
     - name: Generate the basic-auth password on the host (0600, secrets directory only)
       ansible.builtin.shell: set -o pipefail && umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > "$PW_FILE"
       args:
         executable: /bin/bash
       environment:
         PW_FILE: "{{ bootstrap_node_exporter_password_file }}"
-      when: not bootstrap_password_file.stat.exists or (bootstrap_rotate_node_exporter_password | default(false) | bool)
+      when: >-
+        (not bootstrap_password_file.stat.exists or (bootstrap_rotate_node_exporter_password | default(false) | bool))
+        and not (bootstrap_node_exporter_shared_password | bool and bootstrap_node_exporter_scrape_password | length > 0)
       changed_when: true
       no_log: true
     - name: Pin the password file mode and owner
@@ -270,7 +285,7 @@
       check_mode: false
       no_log: true
       when: >-
-        (not bootstrap_web_config.stat.exists or (bootstrap_rotate_node_exporter_password | default(false) | bool))
+        (not bootstrap_web_config.stat.exists or (bootstrap_rotate_node_exporter_password | default(false) | bool) or (bootstrap_password_rotated | bool))
         and (bootstrap_password_file.stat.exists or not ansible_check_mode)
     - name: Render the web config (bcrypt hash only; mode 0644 inside the 0700 directory because the container runs as nobody)
       ansible.builtin.template:
