@@ -66,34 +66,25 @@
     - { job: relief, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.app_metrics }}" }
     - { job: node, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.node_exporter }}" }
 
-# Cloud instances (docs/08): one file per bound slot, regenerated on every run of this play. Prometheus must scrape the standby and every elastic
-# VM like the primary; stale files of released slots are removed below.
-- name: Read the real cloud instances to scrape (slot and public address)
-  ansible.builtin.shell: |
-    set -o pipefail
-    set -a; . {{ mgmt_ops_env_file }}; set +a
-    docker run --rm -e SUPABASE_OPS_URL -e PGSSLROOTCERT=/ca.crt -v {{ mgmt_supabase_ca }}:/ca.crt:ro postgres:17-alpine \
-      psql "$SUPABASE_OPS_URL" -At -F ' ' -c "SELECT s.key, split_part(i.public_ip, '/', 1) FROM ops.capacity_slots s
-        JOIN ops.instances i ON i.id = s.bound_instance_id WHERE NOT i.simulated AND i.public_ip IS NOT NULL
-        AND i.lifecycle_state IN ('deploying', 'ready', 'draining', 'unknown', 'failed') ORDER BY s.key"
-  args:
-    executable: /bin/bash
-  register: mgmt_cloud_scrape
-  changed_when: false
-  no_log: true
+# Cloud instances (docs/08): Prometheus discovers the real cloud VMs over HTTP from the ops service (/sd/cloud, built from ops.instances), so a VM
+# a workflow creates is scraped and a released one dropped without this play. The per-slot files earlier versions rendered are removed: a file of a
+# released slot would stay a permanent down target and keep the freshness gate (every expected job up) failing.
+- name: Find per-slot cloud target files left by earlier versions of this play
+  ansible.builtin.find:
+    paths:
+      - "{{ mgmt_src }}/monitoring/targets/relief"
+      - "{{ mgmt_src }}/monitoring/targets/node"
+    patterns: "cloud-*.json"
+  register: mgmt_cloud_target_files
   when: not ansible_check_mode
 
-- name: Write the file_sd targets for the cloud instances (relief, node_exporter)
-  ansible.builtin.copy:
-    content: |
-      [{"targets": ["{{ item.0[1] }}:{{ inputs.ports[item.1.port] }}"], "labels": {"role": "cloud", "slot": "{{ item.0[0] }}"}}]
-    dest: "{{ mgmt_src }}/monitoring/targets/{{ item.1.job }}/cloud-{{ item.0[0] }}.json"
-    mode: "0644"
-  loop: "{{ (mgmt_cloud_scrape.stdout_lines | default([])) | map('split', ' ') | list | product(mgmt_cloud_jobs) | list }}"
-  vars:
-    mgmt_cloud_jobs:
-      - { job: relief, port: app_metrics }
-      - { job: node, port: node_exporter }
+- name: Remove them
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ mgmt_cloud_target_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
   when: not ansible_check_mode
 
 - name: Write the file_sd targets for the load balancer (HAProxy exporter :8404, public app certificate probe)
