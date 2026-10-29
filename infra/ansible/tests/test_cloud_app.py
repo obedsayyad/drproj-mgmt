@@ -84,3 +84,8 @@ def test_fetch_reexecs_under_the_ansible_venv_python_when_the_driver_is_missing(
     except SystemExit:
         pass
     assert seen["path"] == str(py) and seen["argv"] == [str(py), *sys.argv]
+
+
+def test_query_uses_the_capacity_slots_key_column():
+    # ops.capacity_slots names its primary key `key` (0002_ops_schema.sql); there is no slot_key column on it.
+    assert "s.key AS slot_key" in inv.QUERY and "s.slot_key" not in inv.QUERY

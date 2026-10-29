@@ -14,11 +14,11 @@ import os
 import sys
 
 QUERY = """
-SELECT i.id::text, s.slot_key, i.provider, i.public_ip::text, i.image_digest
+SELECT i.id::text, s.key AS slot_key, i.provider, i.public_ip::text, i.image_digest
 FROM ops.capacity_slots s JOIN ops.instances i ON i.id = s.bound_instance_id
 WHERE i.provider IN ('digitalocean', 'linode') AND NOT i.simulated AND i.public_ip IS NOT NULL
   AND i.lifecycle_state IN ('deploying', 'ready', 'draining', 'unknown')
-ORDER BY s.slot_key
+ORDER BY s.key
 """
 SSH_KEY_ENV = "CLOUD_VM_SSH_KEY_FILE"
 # The Terraform-provisioned first-login user (provider image default). Exposed as cloud_first_contact_user, not ansible_user: the bootstrap
@@ -36,7 +36,7 @@ def fetch(url):
         import psycopg
     except ImportError:
         py = os.environ.get("CLOUD_APP_PYTHON", ANSIBLE_VENV_PYTHON)
-        if os.path.realpath(py) == os.path.realpath(sys.executable) or not os.access(py, os.X_OK):
+        if os.path.abspath(py) == os.path.abspath(sys.executable) or not os.access(py, os.X_OK):
             raise
         os.execv(py, [py, *sys.argv])
 
