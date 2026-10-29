@@ -215,6 +215,25 @@ def test_an_unexpected_answer_to_a_set_command_is_never_assumed_success(fake, pk
         client(fake, pki).set_cmd("set server be_app/warm_bk weight 10\n")
 
 
+@pytest.mark.parametrize("answer", [
+    "IP changed from '0.0.0.0' to '10.0.0.7', port changed from '8443' to '8443' by 'stats socket command'\n",
+    "IP changed from '0.0.0.0' to '10.0.0.7' by 'stats socket command'\n",
+    "port changed from '8443' to '9443' by 'stats socket command'\n",
+])
+def test_the_addr_command_reports_what_it_changed_and_that_is_success(fake, pki, answer):
+    fake.overrides["set server"] = answer
+    client(fake, pki).set_cmd("set server be_app/warm_bk addr 10.0.0.7 port 8443\n")
+
+
+def test_only_addr_commands_may_answer_with_a_change_report_and_errors_still_fail(fake, pki):
+    fake.overrides["set server"] = "IP changed from '0.0.0.0' to '10.0.0.7' by 'stats socket command'\n"
+    with pytest.raises(AdminError, match="admin_answer_unexpected"):
+        client(fake, pki).set_cmd("set server be_app/warm_bk weight 10\n")
+    fake.overrides["set server"] = "No such server.\n"
+    with pytest.raises(AdminError, match="admin_answer_unexpected"):
+        client(fake, pki).set_cmd("set server be_app/warm_bk addr 10.0.0.7 port 8443\n")
+
+
 # ---------------------------------------------------------------- parsing
 @pytest.mark.parametrize("text,code", [
     ("", "state_header_invalid"),

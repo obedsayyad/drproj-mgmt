@@ -39,6 +39,10 @@ class AdminError(Exception):
     """The Runtime API did not give a clear, expected answer. Carries a short code, never socket text."""
 
 
+# Success answers of `set server <b>/<s> addr <ip> port <p>` (HAProxy cli): what changed, or that nothing needed to.
+_ADDR_ANSWER = re.compile(r"^(?:(?:IP changed from '[^']*' to '[^']*'(?:, port changed from '[^']*' to '[^']*')?|port changed from '[^']*' to '[^']*') by '[^']*'|no need to change)\.?$")
+
+
 class CommandRefused(AdminError):
     """Refused by the client allowlist before anything was sent."""
 
@@ -210,11 +214,12 @@ class AdminClient:
         return parse_conn(self.send("show servers conn\n"))
 
     def set_cmd(self, cmd):
-        """A `set server` command. HAProxy answers an empty body on success; any text is an error or an unknown answer."""
+        """A `set server` command. HAProxy answers an empty body on success, except `addr`, which reports what it changed
+        ("IP changed from 'a' to 'b', port changed from 'c' to 'd' by 'stats socket command'"); any other text is an error or an unknown answer."""
         if not cmd.startswith("set server "):
             raise CommandRefused("command_refused")
         answer = self.send(cmd).strip()
-        if answer:
+        if answer and not (" addr " in cmd and _ADDR_ANSWER.match(answer)):
             raise AdminError("admin_answer_unexpected")
 
 
