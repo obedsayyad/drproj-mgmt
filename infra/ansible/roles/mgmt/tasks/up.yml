@@ -109,7 +109,7 @@
   args:
     chdir: "{{ mgmt_compose_dir }}"
   changed_when: true
-  when: mgmt_cloud_key_installed is changed
+  when: mgmt_cloud_key_new | bool
 
 # The 60 s reconcile timer stays off until provider tokens exist (docs/15 §8); the 6 h keep-alive timer stays on.
 # Once providers.env exists the rule's state is the operator's (enabled after a successful manual reconcile), so a rerun leaves it alone.
