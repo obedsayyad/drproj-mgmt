@@ -84,10 +84,14 @@
     project_name: drproj-app
     state: present
     pull: missing
-    recreate: "{{ 'always' if (ca_leaf_changed | default(false) | bool) else 'auto' }}"
+    recreate: "{{ 'always' if app_recreate_always | bool else 'auto' }}"
     wait: true
     wait_timeout: 120
   become: true
+  vars:
+    # node_exporter reads its web config through a bind mount: a replaced file (new inode, e.g. a new scrape password) is only seen after a recreate.
+    app_recreate_always: >-
+      {{ (ca_leaf_changed | default(false) | bool) or (bootstrap_password_rotated | default(false) | bool) or (app_force_recreate | default(false) | bool) }}
   register: app_compose
   tags: [app, deploy]
 
