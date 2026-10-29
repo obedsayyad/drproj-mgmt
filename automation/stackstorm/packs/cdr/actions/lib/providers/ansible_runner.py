@@ -29,6 +29,7 @@ class AnsibleRunner:
         self.ssh_key_path = required(cfg, "ssh_key_path")
         self.ansible_bin = cfg.get("ansible_bin") or "ansible-playbook"
         self.ops_url = ops_url
+        self.last_failure = ""
 
     def _secret_names(self):
         try:
@@ -65,13 +66,32 @@ class AnsibleRunner:
         env = self._env()
         argv = [self.ansible_bin, "-i", os.path.join(self.playbook_dir, "inventory", "cloud_app.py"), "-e", f"inputs_file={self.inputs_path}",
                 "--limit", str(instance_id), os.path.join(self.playbook_dir, "playbooks", "app.yml")]
+        self.last_failure = ""
         try:
             p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env, check=False, cwd=self.playbook_dir)
         except subprocess.TimeoutExpired:
             return None, {}
         except OSError:
             return 127, {}
+        if p.returncode != 0:
+            self.last_failure = parse_failure(p.stdout, instance_id)
         return p.returncode, parse_stats(p.stdout, instance_id)
+
+
+def parse_failure(stdout, instance_id):
+    """'<play> / <task>: <msg>' of the first failed or unreachable task of the host, capped at 300 characters ('' when the output has none).
+    The app role marks every secret-handling task no_log, so Ansible has already censored what must not appear here."""
+    try:
+        doc = json.loads(stdout[stdout.index("{"):])
+        for play in doc.get("plays") or []:
+            for task in play.get("tasks") or []:
+                res = (task.get("hosts") or {}).get(str(instance_id)) or {}
+                if res.get("failed") or res.get("unreachable"):
+                    msg = str(res.get("msg") or res.get("stderr") or "").replace("\n", " ")
+                    return f"{(play.get('play') or {}).get('name', '')} / {(task.get('task') or {}).get('name', '')}: {msg}"[:300]
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return ""
 
 
 def parse_stats(stdout, instance_id):

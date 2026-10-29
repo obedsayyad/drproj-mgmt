@@ -638,3 +638,14 @@ def test_adapter_selection_is_unchanged_and_real_needs_its_settings(env, tmp_pat
     for bad in ({}, {"provider_adapter": "aws"}, None):
         with pytest.raises(AdapterConfigError, match="provider_adapter_missing_or_unknown"):
             providers.load(bad)
+
+
+def test_parse_failure_names_the_failed_task_and_survives_garbage():
+    import json as _json
+    from providers.ansible_runner import parse_failure
+
+    out = "banner\n" + _json.dumps({"plays": [{"play": {"name": "Deploy"}, "tasks": [
+        {"task": {"name": "ok task"}, "hosts": {"i-1": {"failed": False}}},
+        {"task": {"name": "Start the stack"}, "hosts": {"i-1": {"failed": True, "msg": "boom\nline2"}, "i-2": {"failed": True, "msg": "other"}}}]}]})
+    assert parse_failure(out, "i-1") == "Deploy / Start the stack: boom line2"
+    assert parse_failure(out, "i-9") == "" and parse_failure("not json", "i-1") == "" and parse_failure("{}", "i-1") == ""

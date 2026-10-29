@@ -150,7 +150,8 @@ class RealAdapter(ProviderAdapter):
         if rc is None:
             return {"result": "failed", "code": "deploy_timeout"}
         if rc != 0:
-            return {"result": "failed", "code": "deploy_failed"}
+            detail = getattr(self.ansible, "last_failure", "")
+            return {"result": "failed", "code": "deploy_failed", **({"detail": detail} if isinstance(detail, str) and detail else {})}
         if stats.get("ready") is not True or str(stats.get("instance_id")) != str(target["instance_id"]) or not stats.get("digest"):
             return {"result": "failed", "code": "deploy_unverified"}
         return {"result": "ok", "state": "ready", "identity": stats["instance_id"], "image_digest": stats["digest"]}
