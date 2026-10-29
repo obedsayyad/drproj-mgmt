@@ -1,0 +1,14 @@
+---
+name: load_test
+pack: cdr
+description: "Steps of the k6 workflows (P6.3): validate against policy demo.*, start/wait/stop k6 on the testing host through the forced-command SSH key, project ops.test_runs. No lease."
+runner_type: python-script
+entry_point: load_test.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 720}
+  task: {type: string, required: true, enum: [validate, start, wait, stop]}
+  operation_id: {type: string, required: true}
+  run_id: {type: string}
+  work_ms: {type: integer}
+  duration_seconds: {type: integer}

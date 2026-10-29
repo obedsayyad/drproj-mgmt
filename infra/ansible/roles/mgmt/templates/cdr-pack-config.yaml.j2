@@ -9,6 +9,12 @@ provider_adapter: real
 policy_compile: simulation
 prometheus_url: http://prometheus:9090
 prometheus_expected_jobs: relief
+# k6 on the testing host (P6.3): forced-command key (k6ctl), fixed verbs only.
+testing_ssh:
+  host: "{{ mgmt_testing_ip }}"
+  user: "{{ mgmt_testing_ssh_user }}"
+  key: /run/secrets/testing_ssh_key
+  known_hosts: /run/secrets/testing_known_hosts
 real_adapter:
   tf_slot_script: /opt/drproj/scripts/tf-slot.sh
   tf_state_dir: "{{ inputs.cloud_application.terraform.tf_state_dir }}"

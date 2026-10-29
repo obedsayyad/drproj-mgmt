@@ -1,3 +1,13 @@
 ---
-# Placeholder so defaults/ exists; the testing role is a scaffold until P8.
-testing_phase: "P8"
+# Testing host (docs/02, docs/10): k6 runs as a Compose job on demand; the only way in is the forced-command key (see tasks).
+testing_dir: /opt/drproj/k6
+testing_k6_image: "grafana/k6:{{ inputs.versions.k6 }}"
+testing_target: "https://{{ inputs.ingress.application }}"
+# The cap values mirror policy demo.max_* (policy-defaults.json); k6ctl enforces them again so a rogue caller of the key is still bounded.
+testing_max_rate_rps: 200
+testing_max_duration_seconds: 600
+testing_max_work_ms: 250
+# The cdr.js source of truth is tests/load/cdr.js in this repo; on the controller it sits next to the ansible tree.
+testing_script_src: /opt/drproj/src/drproj-mgmt/tests/load/cdr.js
+# Public key of the management->testing key (the private half stays in the runner secrets). Empty: the forced-command key is not installed.
+testing_runner_pubkey: ""

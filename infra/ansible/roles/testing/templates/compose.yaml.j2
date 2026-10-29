@@ -1,0 +1,20 @@
+# Managed by Ansible (roles/testing). k6 is a one-shot job started by k6ctl; nothing here listens.
+services:
+  k6:
+    image: {{ testing_k6_image }}
+    command: ["run", "/scripts/cdr.js"]
+    labels:
+      drproj.run_id: ${RUN_ID:?}
+    environment:
+      TARGET: {{ testing_target }}
+      RESULTS_DIR: /results
+      RUN_ID: ${RUN_ID:?}
+      SCENARIO: ${SCENARIO:?}
+      RATE: ${RATE:?}
+      DURATION: ${DURATION:?}
+      WORK_MS: ${WORK_MS:?}
+    volumes:
+      - {{ testing_dir }}/tests:/scripts:ro
+      - {{ testing_dir }}/results:/results
+    mem_limit: 1536m
+    restart: "no"

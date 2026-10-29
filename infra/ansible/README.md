@@ -7,5 +7,5 @@ Configures the four pre-created self-hosted hosts and deploys the relief app to 
 - The fixed hosts are operated as root (approved deviation, `inventory/group_vars/fixed.yml`); bootstrap runs from the management VM (`/opt/drproj/ansible`, venv `/opt/drproj/ansible-venv`).
 - `scripts/gen-inventory.py` writes `inventory/generated.yml` from `deploy/inputs/deployment-inputs.local.json`.
 - `inventory/cloud_app.py` is the dynamic inventory of cloud VMs (`ops.instances`, `DR_AUTOMATION_URL`).
-- Roles: `bootstrap`, `app`, `ca` (implemented); `lb` (P6), `mgmt` (P6/P7), `testing` (P8) are scaffolds that fail with `not_implemented`.
+- Roles: `bootstrap`, `app`, `ca` (implemented); `lb`, `mgmt` and `testing` (P6.3, k6 behind a forced-command key) are implemented.
 - Secrets are never in this tree: `env://NAME` references resolve from the controller environment; Ansible Vault is not used.

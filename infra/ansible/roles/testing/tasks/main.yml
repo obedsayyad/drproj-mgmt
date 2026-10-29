@@ -1,5 +1,77 @@
 ---
-- name: Fail because the testing role is not implemented yet (P8)
-  ansible.builtin.fail:
-    msg: "not_implemented: the testing role lands in P8 (docs/11)"
-  tags: [testing, not_implemented]
+# Testing host (docs/10): the k6 Compose project, the script, the forced-command wrapper and the management->testing key.
+- name: Check the inputs this role needs
+  ansible.builtin.assert:
+    that:
+      - inputs.versions.k6 | length > 0
+      - inputs.ingress.application | length > 0
+    fail_msg: "versions.k6 and ingress.app must be set in the deployment inputs"
+    quiet: true
+  tags: [testing, always]
+
+- name: Create the k6 directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ testing_dir }}", mode: "0755" }
+    - { path: "{{ testing_dir }}/tests", mode: "0755" }
+    - { path: "{{ testing_dir }}/bin", mode: "0755" }
+    - { path: "{{ testing_dir }}/results", mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [testing]
+
+- name: Install the k6 script
+  ansible.builtin.copy:
+    src: "{{ testing_script_src }}"
+    dest: "{{ testing_dir }}/tests/cdr.js"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [testing]
+
+- name: Render the Compose project
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ testing_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [testing]
+
+- name: Install k6ctl with the policy caps
+  ansible.builtin.copy:
+    content: "{{ lookup('ansible.builtin.file', 'k6ctl') | replace('__MAX_RATE__', testing_max_rate_rps | string) | replace('__MAX_DURATION__', testing_max_duration_seconds | string) | replace('__MAX_WORK__', testing_max_work_ms | string) }}"
+    dest: "{{ testing_dir }}/bin/k6ctl"
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [testing]
+
+- name: Authorize the management key for k6ctl only
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ testing_runner_pubkey }}"
+    key_options: 'command="{{ testing_dir }}/bin/k6ctl",restrict'
+    comment: drproj-runner-k6ctl
+    exclusive: false
+  when: testing_runner_pubkey | length > 0
+  tags: [testing]
+
+- name: Pull the k6 image
+  community.docker.docker_image:
+    name: "{{ testing_k6_image }}"
+    source: pull
+  tags: [testing]
+
+- name: Validate the Compose project
+  ansible.builtin.command:
+    cmd: docker compose config -q
+    chdir: "{{ testing_dir }}"
+  environment: { RUN_ID: x, SCENARIO: smoke, RATE: "1", DURATION: "1", WORK_MS: "1" }
+  changed_when: false
+  tags: [testing]

@@ -1,7 +1,7 @@
 ---
 galaxy_info:
   author: drproj
-  description: Testing host with k6 (scaffold until P8)
+  description: Testing host with k6 (bounded Compose job behind a forced-command key)
   license: MIT
   min_ansible_version: "2.17"
   role_name: testing
@@ -11,5 +11,5 @@ galaxy_info:
       versions: [all]
     - name: Ubuntu
       versions: [all]
-  galaxy_tags: [k6, scaffold]
+  galaxy_tags: [k6]
 dependencies: []

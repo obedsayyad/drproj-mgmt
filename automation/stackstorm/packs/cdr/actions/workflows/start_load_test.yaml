@@ -1,13 +1,13 @@
 version: 1.0
 description: >
-  SKELETON (P6). Start a bounded k6 load test: not implemented until P6/P8. Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
-  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
-  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+  Start a bounded k6 scenario on the testing host (P6.3). Validates the run against the captured policy demo.* bounds, starts k6 through the forced-command SSH key (fixed argv, no shell text from the API), polls to the end and projects ops.test_runs (status, results location, summary p95_ms/error_rate/requests). A stop request (stop_load_test) ends it cancelled. No capacity lease or slot is touched.
 input:
   - operation_id
 vars:
   - error: {}
   - failed_step: ''
+  - run: {}
+  - result: {}
 tasks:
   start:
     action: cdr.update_ops_state
@@ -25,12 +25,14 @@ tasks:
           - error: <% result() %>
         do: fail_handler
   validate_bounds:
-    action: cdr.not_implemented
+    action: cdr.load_test
     input:
-      step: validate_bounds
-      phase: P6
+      task: validate
+      operation_id: <% ctx().operation_id %>
     next:
       - when: <% succeeded() %>
+        publish:
+          - run: <% result().result %>
         do: start_k6
       - when: <% failed() %>
         publish:
@@ -38,10 +40,11 @@ tasks:
           - failed_step: validate_bounds
         do: fail_handler
   start_k6:
-    action: cdr.not_implemented
+    action: cdr.load_test
     input:
-      step: start_k6
-      phase: P6
+      task: start
+      operation_id: <% ctx().operation_id %>
+      work_ms: <% ctx().run.work_ms %>
     next:
       - when: <% succeeded() %>
         do: observe
@@ -51,15 +54,86 @@ tasks:
           - failed_step: start_k6
         do: fail_handler
   observe:
-    action: cdr.not_implemented
+    action: cdr.load_test
     input:
-      step: observe
-      phase: P6
+      task: wait
+      operation_id: <% ctx().operation_id %>
+      run_id: <% ctx().run.run_id %>
+      duration_seconds: <% ctx().run.duration_seconds %>
     next:
+      - when: <% succeeded() and result().result.state = 'succeeded' %>
+        publish:
+          - result: <% result().result %>
+        do: verifying
+      - when: <% succeeded() and result().result.state = 'cancelled' %>
+        publish:
+          - result: <% result().result %>
+        do: cancelling
+      - when: <% succeeded() and result().result.state = 'failed' %>
+        publish:
+          - error: <% result().result %>
+          - failed_step: observe
+        do: fail_handler
       - when: <% failed() %>
         publish:
           - error: <% result() %>
           - failed_step: observe
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: k6 finished
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: <% ctx().result %>
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  cancelling:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: cancel
+      status: cancelling
+      message: stop requested
+    next:
+      - when: <% succeeded() %>
+        do: cancelled
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  cancelled:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.cancelled
+      step: cancelled
+      status: cancelled
+      outcome: <% ctx().result %>
+    next:
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
         do: fail_handler
   fail_handler:
     action: cdr.fail_operation

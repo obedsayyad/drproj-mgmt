@@ -1,0 +1,56 @@
+#!/bin/sh
+# Forced command of the management->testing key (authorized_keys command=): the ONLY thing that key can do. It reads
+# SSH_ORIGINAL_COMMAND and accepts exactly four verbs with strictly validated arguments, never a shell string:
+#   start <run_id> <scenario> <rate_rps> <duration_s> <work_ms>   run one bounded k6 container (fixed name, so a second start fails)
+#   stop                                                           kill the k6 container
+#   status                                                         JSON: state, exit code, run id
+#   result <run_id>                                                print that run's result.json
+set -eu
+DIR=/opt/drproj/k6
+NAME=drproj-k6
+MAX_RATE=__MAX_RATE__
+MAX_DURATION=__MAX_DURATION__
+MAX_WORK=__MAX_WORK__
+fail() { echo "k6ctl: $1" >&2; exit 64; }
+num() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "${#1}" -le 4 ]; }
+# shellcheck disable=SC2086
+set -- ${SSH_ORIGINAL_COMMAND:-}
+verb="${1:-}"; [ "$#" -gt 0 ] && shift
+case "$verb" in
+  start)
+    [ "$#" -eq 5 ] || fail "usage"
+    run_id="$1"; scenario="$2"; rate="$3"; duration="$4"; work="$5"
+    case "$run_id" in *[!A-Za-z0-9-]*|'') fail "run_id";; esac
+    [ "${#run_id}" -le 40 ] || fail "run_id"
+    case "$scenario" in smoke|baseline|compute_pressure|sustained_surge|recovery) ;; *) fail "scenario";; esac
+    num "$rate" && num "$duration" && num "$work" || fail "number"
+    [ "$rate" -ge 1 ] && [ "$rate" -le "$MAX_RATE" ] || fail "rate_bounds"
+    [ "$duration" -ge 1 ] && [ "$duration" -le "$MAX_DURATION" ] || fail "duration_bounds"
+    [ "$work" -ge 1 ] && [ "$work" -le "$MAX_WORK" ] || fail "work_bounds"
+    if docker inspect "$NAME" >/dev/null 2>&1; then
+      state=$(docker inspect -f '{{.State.Status}}' "$NAME")
+      [ "$state" = "running" ] && fail "already_running"
+      docker rm -f "$NAME" >/dev/null
+    fi
+    mkdir -p "$DIR/results/$run_id"
+    chmod 0777 "$DIR/results/$run_id"   # the k6 image runs as uid 12345
+    cd "$DIR"
+    RUN_ID="$run_id" SCENARIO="$scenario" RATE="$rate" DURATION="$duration" WORK_MS="$work" \
+      docker compose run -d --no-deps --name "$NAME" k6 >/dev/null
+    echo "{\"started\":\"$run_id\"}"
+    ;;
+  stop)
+    docker kill "$NAME" >/dev/null 2>&1 || true
+    echo "{\"stopped\":true}"
+    ;;
+  status)
+    if ! docker inspect "$NAME" >/dev/null 2>&1; then echo '{"state":"none"}'; exit 0; fi
+    docker inspect -f '{"state":"{{.State.Status}}","exit_code":{{.State.ExitCode}},"run_id":"{{index .Config.Labels "drproj.run_id"}}","finished_at":"{{.State.FinishedAt}}"}' "$NAME"
+    ;;
+  result)
+    [ "$#" -eq 1 ] || fail "usage"
+    case "$1" in *[!A-Za-z0-9-]*|'') fail "run_id";; esac
+    cat "$DIR/results/$1/result.json"
+    ;;
+  *) fail "verb" ;;
+esac

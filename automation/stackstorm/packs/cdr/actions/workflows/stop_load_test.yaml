@@ -1,13 +1,11 @@
 version: 1.0
 description: >
-  SKELETON (P6). Stop a running k6 load test: not implemented until P6/P8. Fails with not_implemented. Every planned step below is an explicit cdr.not_implemented task: the first one fails, the operation is
-  recorded failed with outcome error not_implemented and the failing step, and nothing else runs (no lease, no slot, no routing, no provider call).
-  The remaining tasks are the planned sequence, kept so the implementing phase fills them in place.
+  Stop the running k6 test (P6.3): marks the active ops.test_runs row cancelling, then kills the k6 container on the testing host. The start_load_test workflow notices the exit and records the run cancelled.
 input:
   - operation_id
 vars:
   - error: {}
-  - failed_step: ''
+  - result: {}
 tasks:
   start:
     action: cdr.update_ops_state
@@ -25,22 +23,53 @@ tasks:
           - error: <% result() %>
         do: fail_handler
   stop_k6:
-    action: cdr.not_implemented
+    action: cdr.load_test
     input:
-      step: stop_k6
-      phase: P6
+      task: stop
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() %>
+        publish:
+          - result: <% result().result %>
+        do: verifying
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: k6 container killed
+    next:
+      - when: <% succeeded() %>
+        do: succeed
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  succeed:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.succeeded
+      step: done
+      status: succeeded
+      outcome: <% ctx().result %>
     next:
       - when: <% failed() %>
         publish:
           - error: <% result() %>
-          - failed_step: stop_k6
         do: fail_handler
   fail_handler:
     action: cdr.fail_operation
     input:
       operation_id: <% ctx().operation_id %>
       error: <% ctx().error %>
-      step: <% ctx().failed_step or 'start' %>
+      step: stop_k6
     retry:
       when: <% failed() %>
       count: 5

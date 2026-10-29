@@ -1,4 +1,4 @@
-"""Paths of the P4.4 workflows (standby_repair, apply_policy, the not_implemented skeletons) driven through Orquesta's conductor with canned task
+"""Paths of the P4.4 workflows (standby_repair, apply_policy, the remaining not_implemented skeletons, the k6 workflows) driven through Orquesta's conductor with canned task
 results (same harness as test_workflow_failure_paths.py). What matters: which provider-side steps run for each classification (and which never do),
 that an unknown answer creates nothing, that every failure reaches the one handler that releases the lease, that every task input has the type its
 action declares, and that a skeleton can never end succeeded."""
@@ -340,8 +340,6 @@ def test_a_failure_with_the_lease_held_releases_it():
 
 # ------------------------------------------------------------------ skeletons
 SKELETONS = {
-    "start_load_test": ["validate_bounds", "start_k6", "observe"],
-    "stop_load_test": ["stop_k6"],
     "create_backup": ["backup_lease", "pg_dump_capture", "record_artifact", "verify_after_capture", "expire_old"],
     "verify_backup": ["isolated_restore", "verify_contents", "record_result"],
     "restore_application": ["validate_verified_backup", "maintenance_on", "drain_writes", "safety_dump", "schema_swap", "verify_through_api", "maintenance_off"],
@@ -377,3 +375,38 @@ def test_a_skeleton_workflow_never_records_success(name):
     # the step action always fails; this pins that nothing in the workflow file could turn that into a success event
     text = open(os.path.join(WORKFLOWS, name + ".yaml")).read()
     assert "operation.succeeded" not in text and "status: succeeded" not in text
+
+
+# ------------------------------------------------------------------ k6 workflows (P6.3)
+RUN = {"run_id": "r1", "scenario": "smoke", "rate_rps": 10, "duration_seconds": 60, "work_ms": 100}
+K6_OK = {"cdr.load_test": lambda i: py({"validate": RUN, "start": {"run_id": "r1"}, "wait": {"state": "succeeded", "run_id": "r1", "summary": {"p95_ms": 40.0, "error_rate": 0, "requests": 600}}}[i["task"]])}
+
+
+def test_start_load_test_runs_validate_start_wait_and_records_the_summary():
+    status, ran = drive("start_load_test", {"operation_id": OP}, K6_OK)
+    assert [i["task"] for _n, a, i in ran if a == "cdr.load_test"] == ["validate", "start", "wait"]
+    assert events_of(ran) == ["operation.started", "operation.step.completed", "operation.succeeded"]
+    assert last_outcome(ran, "operation.succeeded")["outcome"]["summary"]["requests"] == 600
+    assert set(ran_actions(ran)) <= {"cdr.update_ops_state", "cdr.load_test"}  # no lease, slot, routing or provider action
+
+
+def test_start_load_test_out_of_bounds_stops_before_k6_starts():
+    status, ran = drive("start_load_test", {"operation_id": OP}, K6_OK, fail="validate_bounds")
+    assert names(ran) == ["start", "validate_bounds", "fail_handler"] and ran[-1][2]["step"] == "validate_bounds"
+
+
+def test_start_load_test_cancelled_run_ends_cancelled_not_succeeded():
+    res = {"cdr.load_test": lambda i: py({"validate": RUN, "start": {"run_id": "r1"}, "wait": {"state": "cancelled", "run_id": "r1"}}[i["task"]])}
+    status, ran = drive("start_load_test", {"operation_id": OP}, res)
+    assert events_of(ran)[-1] == "operation.cancelled" and "operation.succeeded" not in events_of(ran)
+
+
+def test_start_load_test_k6_failure_fails_the_operation():
+    res = {"cdr.load_test": lambda i: py({"validate": RUN, "start": {"run_id": "r1"}, "wait": {"state": "failed", "error": "k6_exit_1", "run_id": "r1"}}[i["task"]])}
+    status, ran = drive("start_load_test", {"operation_id": OP}, res)
+    assert names(ran)[-1] == "fail_handler" and ran[-1][2]["step"] == "observe" and "operation.succeeded" not in events_of(ran)
+
+
+def test_stop_load_test_kills_k6_and_succeeds():
+    status, ran = drive("stop_load_test", {"operation_id": OP}, {"cdr.load_test": py({"run_id": "r1", "stopped": True})})
+    assert events_of(ran)[-1] == "operation.succeeded" and [i["task"] for _n, a, i in ran if a == "cdr.load_test"] == ["stop"]

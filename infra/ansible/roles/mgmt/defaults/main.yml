@@ -57,6 +57,8 @@ mgmt_secret_owners:
   - { file: cdr-pack-config.yaml, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: lb_ssh_key, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: lb_known_hosts, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
+  - { file: testing_ssh_key, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
+  - { file: testing_known_hosts, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: mgmt_known_hosts, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: cloud_vm_key, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: grafana_admin_password, owner: "{{ mgmt_grafana_uid }}", group: "0", mode: "0600" }
@@ -73,6 +75,9 @@ mgmt_lb_ip: "{{ inputs.hosts.load_balancer.public_ip }}"
 mgmt_lb_ssh_user: "{{ inputs.hosts.load_balancer.ssh_user | default('root') }}"
 mgmt_lb_ssh_key_src: "{{ inputs.hosts.load_balancer.ssh_key_reference | default('~/.ssh/drproj') | expanduser }}"
 mgmt_lb_known_hosts_src: "{{ ('~/.ssh/known_hosts') | expanduser }}"
+# k6 on the testing host (P6.3): a dedicated key whose authorized_keys entry is forced to k6ctl (roles/testing).
+mgmt_testing_ip: "{{ inputs.hosts.testing.public_ip }}"
+mgmt_testing_ssh_user: "{{ inputs.hosts.testing.ssh_user | default('root') }}"
 mgmt_runner_client_days: 90
 mgmt_runner_client_renew_days: 30
 mgmt_ca_dir: /etc/drproj/ca

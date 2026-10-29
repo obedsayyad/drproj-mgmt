@@ -52,6 +52,16 @@ prometheus_config_path:
   description: Live prometheus.yml (read-write) for policy_compile real. Needs prometheus_url too.
   type: string
   required: false
+testing_ssh:
+  description: "k6 on the testing host (P6.3). Management->testing key whose authorized_keys entry forces k6ctl (fixed verbs, validated args). Paths only. Without it start_load_test and stop_load_test fail testing_ssh_config_missing; nothing pretends."
+  type: object
+  required: false
+  additionalProperties: false
+  properties:
+    host: {type: string, required: true, description: "Testing VM public IP (hosts.testing.public_ip)."}
+    user: {type: string, required: true}
+    key: {type: string, required: true, description: "Private key path inside the runner (mode 0600), e.g. /run/secrets/testing_ssh_key."}
+    known_hosts: {type: string, required: false, description: "known_hosts file with the testing host key (StrictHostKeyChecking=yes)."}
 real_adapter:
   description: "Settings of the real provider adapter. The schema cannot make this object conditional on provider_adapter: real, so providers.load rejects provider_adapter real without it (real_adapter_config_missing); when present, every key below is required. Values ending in _env name an environment variable (env://NAME or NAME) read at call time; no secret is stored here."
   type: object
