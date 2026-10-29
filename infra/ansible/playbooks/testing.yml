@@ -1,6 +1,7 @@
 ---
 # Testing host (docs/10), run on the management VM:
-#   ansible-playbook playbooks/testing.yml --check --diff --limit testing-vm -e testing_runner_pubkey="$(cat /etc/drproj/mgmt/secrets/testing_ssh_key.pub)"
+#   printf '{"testing_runner_pubkey": "%s"}' "$(cat /etc/drproj/mgmt/secrets/testing_ssh_key.pub)" > /opt/drproj/k6key.json
+#   ansible-playbook playbooks/testing.yml --check --diff --limit testing-vm -e @/opt/drproj/k6key.json
 - name: Configure the testing host
   hosts: testing
   become: true
