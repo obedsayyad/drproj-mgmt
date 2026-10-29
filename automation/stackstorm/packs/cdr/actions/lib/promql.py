@@ -12,7 +12,9 @@ class PromError(Exception):
     pass
 
 
-P95 = 'histogram_quantile(0.95, sum by (le) (rate(relief_http_request_duration_seconds_bucket[{w}])))'
+# /health/ready is excluded: it does a database round trip and is hit by the failback's own direct probes (and operators), so with no user
+# traffic it would be the whole sample and the gate would measure the probe, not the app. /health/live (HAProxy checks) stays in.
+P95 = 'histogram_quantile(0.95, sum by (le) (rate(relief_http_request_duration_seconds_bucket{{route!="/health/ready"}}[{w}])))'
 RESP = 'haproxy_server_http_responses_total{{proxy="be_app",server="primary"{extra}}}'
 
 

@@ -1,4 +1,6 @@
 """Shared helpers of the failback actions (docs/04): primary identity, direct health probes, incident baseline."""
+import time
+
 import requests
 
 from cdr_db import call
@@ -20,12 +22,24 @@ def baseline_p95(config):
     return True, (rows[0][0] if rows else None)
 
 
+class ProbeResult(tuple):
+    """(live ok, ready ok) plus .detail: one short credential-free entry per failed path (status or exception class, seconds)."""
+    detail = ()
+
+
 def probe(ip, ca_bundle):
     """Direct probe from the management VM: (/health/live ok, /health/ready ok) on ip:8443. Any error is not ok."""
-    out = []
+    out, detail = [], []
     for path in ("/health/live", "/health/ready"):
+        started = time.monotonic()
         try:
-            out.append(requests.get(f"https://{ip}:8443{path}", timeout=4, verify=ca_bundle or True).status_code == 200)
-        except requests.RequestException:
+            code = requests.get(f"https://{ip}:8443{path}", timeout=4, verify=ca_bundle or True).status_code
+            out.append(code == 200)
+            if code != 200:
+                detail.append({"path": path, "status": code, "seconds": round(time.monotonic() - started, 2)})
+        except requests.RequestException as exc:
             out.append(False)
-    return tuple(out)
+            detail.append({"path": path, "error": type(exc).__name__, "seconds": round(time.monotonic() - started, 2)})
+    result = ProbeResult(out)
+    result.detail = tuple(detail)
+    return result

@@ -43,10 +43,11 @@ class FailbackObserve(Action):
         with LeaseKeeper(self.config, operation_id, lease_generation, coordination["lease_renewal_seconds"]) as keeper:
             while time.monotonic() < end:
                 keeper.check()
-                if all(probe(ip, adapter.ca_bundle)):
+                result = probe(ip, adapter.ca_bundle)
+                if all(result):
                     streak += 1
                 else:
-                    return True, {"passed": False, "failed_gates": ["health"], "step_percent": step_percent, "adapter_mode": adapter.mode}
+                    return True, {"passed": False, "failed_gates": ["health"], "probe_failure": list(getattr(result, "detail", ())), "after_good_probes": streak, "step_percent": step_percent, "adapter_mode": adapter.mode}
                 time.sleep(min(poll_seconds, max(0.0, end - time.monotonic())))
         try:
             values = {"5xx": instant(url, q_5xx_ratio()), "p95": instant(url, q_p95()), "cpu": instant(url, q_cpu(ip)), "fresh": instant(url, q_fresh())}

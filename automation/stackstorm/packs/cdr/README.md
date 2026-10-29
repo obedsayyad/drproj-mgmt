@@ -2,7 +2,7 @@
 
 - `cdr.keepalive` runs `SELECT 1` and appends a row to `ops.keepalive_runs` (migration `ops/0007`).
   The ops API exposes the newest success as `cdr_supabase_keepalive_last_success_timestamp`.
-- `cdr.keepalive_every_6h` fires it on `core.st2.IntervalTimer` (6 h).
+- `cdr.keepalive_every_6h` fires it on `core.st2.CronTimer` (00/06/12/18:01 UTC; an IntervalTimer restarts on every rule re-registration and never fired across frequent deploys).
 - `cdr.cdr_alert` (rule) receives the Alertmanager webhook `POST /v1/webhooks/cdr_alert` (St2-Api-Key) and runs
   `cdr.alert_intent` (P4.3), which upserts firing alerts into `ops.processed_events` (`source=alertmanager`, migration
   `ops/0008`, the P3.2 `cdr.record_alert` behaviour) and maps the `cdr_event` label to a capacity intent (below).

@@ -1,12 +1,17 @@
 ---
 name: keepalive_every_6h
 pack: cdr
-description: Supabase Free keep-alive every 6 hours (runtime.supabase_keepalive_interval_hours).
+description: >
+  Supabase Free keep-alive every 6 hours (runtime.supabase_keepalive_interval_hours), at 00/06/12/18:01 UTC. A wall-clock cron, not an
+  IntervalTimer: interval jobs restart from "now" whenever the rule is re-registered (every pack deploy), so with deploys more often
+  than every 6 h the keep-alive never ran (last run 07:01 on 2026-10-29 until the P6.3 recovery).
 enabled: true
 trigger:
-  type: core.st2.IntervalTimer
+  type: core.st2.CronTimer
   parameters:
-    unit: hours
-    delta: 6
+    timezone: UTC
+    hour: "*/6"
+    minute: 1
+    second: 0
 action:
   ref: cdr.keepalive

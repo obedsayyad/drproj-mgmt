@@ -369,7 +369,8 @@ def alert(event, fp="a1", status="firing", version="1"):
     return {"status": status, "fingerprint": fp, "labels": {"alertname": "X", "cdr_event": event, "policy_version": version}}
 
 
-def test_alert_intent_opens_one_operation_per_fingerprint_and_dispatches_it_once(db, tmp_path):
+def test_alert_intent_opens_one_operation_per_fingerprint_and_dispatches_it_once(db, sim, tmp_path):
+    provisioned(db, sim, tmp_path, "digitalocean")  # an elastic VM exists, so cpu.low has something to scale in
     a = intent(tmp_path)
     ok, out = a.run({"alerts": [alert("app.cpu.low")]})
     assert ok and out["intents"][0]["kind"] == "scale_in" and out["intents"][0]["created"] is True
@@ -382,7 +383,8 @@ def test_alert_intent_opens_one_operation_per_fingerprint_and_dispatches_it_once
     assert db.execute("SELECT count(*) FROM ops.operation_events WHERE operation_id = %s::uuid AND event_type = 'app.cpu.low'", (op,)).fetchone()[0] == 1
 
 
-def test_alert_intent_stale_metrics_block_cpu_intents_but_not_the_primary_failure(db, tmp_path):
+def test_alert_intent_stale_metrics_block_cpu_intents_but_not_the_primary_failure(db, sim, tmp_path):
+    provisioned(db, sim, tmp_path, "digitalocean")  # an elastic VM exists, so cpu.low has something to scale in
     a = intent(tmp_path)
     out = a.run({"alerts": [alert("metrics.stale", "s1"), alert("app.cpu.high", "h1"), alert("app.cpu.low", "l1"), alert("app.primary.unhealthy", "p1")]})[1]
     assert out["stale"] is True
@@ -392,7 +394,24 @@ def test_alert_intent_stale_metrics_block_cpu_intents_but_not_the_primary_failur
     assert [s[0] for s in a.sent] == ["cdr.primary_failure"]
     out = a.run({"alerts": [alert("metrics.stale", "s1", "resolved")]})[1]
     assert out["stale"] is False
+    assert a.run({"alerts": [alert("app.cpu.low", "l2")]})[1]["intents"][0] == {"event": "app.cpu.low", "skipped": "primary_outage"}  # the failure above is still open
+    db.execute("UPDATE ops.operations SET status = 'succeeded', finished_at = now() WHERE kind = 'primary_failure'")
+    db.execute("UPDATE ops.incidents SET state = 'resolved', resolved_at = now() WHERE fingerprint LIKE 'primary.unhealthy%'")
     assert a.run({"alerts": [alert("app.cpu.low", "l2")]})[1]["intents"][0]["kind"] == "scale_in"
+
+
+def test_alert_intent_cpu_low_repeats_open_no_scale_in_while_the_primary_is_out_and_resume_after_it_resolves(db, sim, tmp_path):
+    provisioned(db, sim, tmp_path, "digitalocean")  # an elastic VM exists, so cpu.low has something to scale in
+    a = intent(tmp_path)
+    assert a.run({"alerts": [alert("app.primary.unhealthy", "p1")]})[0]
+    a.sent.clear()
+    for _ in range(3):  # Alertmanager repeat_interval
+        out = a.run({"alerts": [alert("app.cpu.low", "l1")]})[1]
+        assert out["intents"] == [{"event": "app.cpu.low", "skipped": "primary_outage"}]
+    assert a.sent == [] and db.execute("SELECT count(*) FROM ops.operations WHERE kind = 'scale_in'").fetchone()[0] == 0
+    db.execute("UPDATE ops.operations SET status = 'succeeded', finished_at = now() WHERE kind = 'primary_failure'")
+    db.execute("UPDATE ops.incidents SET state = 'resolved', resolved_at = now() WHERE fingerprint LIKE 'primary.unhealthy%'")
+    assert a.run({"alerts": [alert("app.cpu.low", "l1")]})[1]["intents"][0]["kind"] == "scale_in"
 
 
 def test_alert_intent_haproxy_standby_alert_dispatches_standby_repair_by_label_or_alertname(db, tmp_path):
@@ -404,7 +423,8 @@ def test_alert_intent_haproxy_standby_alert_dispatches_standby_repair_by_label_o
     assert a.run({"alerts": [by_name]})[1]["intents"][0]["kind"] == "standby_repair"
 
 
-def test_alert_intent_primary_unhealthy_opens_the_incident_and_supersedes_a_queued_scale_in(db, tmp_path):
+def test_alert_intent_primary_unhealthy_opens_the_incident_and_supersedes_a_queued_scale_in(db, sim, tmp_path):
+    provisioned(db, sim, tmp_path, "digitalocean")  # an elastic VM exists, so cpu.low has something to scale in
     a = intent(tmp_path)
     queued = a.run({"alerts": [alert("app.cpu.low", "l1")]})[1]["intents"][0]["operation_id"]
     out = a.run({"alerts": [alert("app.primary.unhealthy", "p1")]})[1]["intents"][0]
@@ -428,7 +448,8 @@ def test_alert_intent_cpu_high_activates_an_idle_ready_standby_first_then_scales
     assert a.run({"alerts": [alert("app.cpu.high", "h4")]})[1]["intents"][0]["kind"] == "scale_out"
 
 
-def test_alert_intent_a_failed_dispatch_leaves_the_operation_queued_and_is_reported(db, tmp_path):
+def test_alert_intent_a_failed_dispatch_leaves_the_operation_queued_and_is_reported(db, sim, tmp_path):
+    provisioned(db, sim, tmp_path, "digitalocean")  # an elastic VM exists, so cpu.low has something to scale in
     class Down(Intent):
         def _api(self):
             raise St2Unavailable("down")
@@ -781,3 +802,13 @@ def test_restore_probe_without_its_settings_refuses(db, tmp_path):
 
     op, gen = lease_of(db, "reconcile")
     assert make(RunHeavy, tmp_path).run("restore_probe", "heavy", op, gen) == (False, "restore_probe_config_missing")
+
+
+def test_alert_intent_cpu_low_repeats_open_no_operation_when_there_is_no_elastic_vm_and_the_warm_standby_is_not_serving(db, sim, tmp_path):
+    provisioned(db, sim, tmp_path, "digitalocean", "warm")
+    a = intent(tmp_path)
+    for _ in range(3):  # Alertmanager repeat_interval on an idle, fully scaled-in fleet
+        assert a.run({"alerts": [alert("app.cpu.low", "l1")]})[1]["intents"] == [{"event": "app.cpu.low", "skipped": "no_candidate"}]
+    assert a.sent == [] and db.execute("SELECT count(*) FROM ops.operations WHERE kind = 'scale_in'").fetchone()[0] == 0
+    db.execute("UPDATE ops.instances SET routing_mode = 'active' WHERE id IN (SELECT bound_instance_id FROM ops.capacity_slots WHERE role = 'warm')")
+    assert a.run({"alerts": [alert("app.cpu.low", "l1")]})[1]["intents"][0]["kind"] == "scale_in"  # overflow recovery still gets its operation
