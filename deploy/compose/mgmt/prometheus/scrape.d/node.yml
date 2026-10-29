@@ -10,3 +10,7 @@ scrape_configs:
       password_file: /etc/prometheus/node-exporter-password
     file_sd_configs:
       - files: ["/etc/prometheus/targets/node/*.json"]
+    # The real cloud VMs follow ops.instances (a VM a workflow just created is scraped within one refresh); same labels as the rendered file entries.
+    http_sd_configs:
+      - url: http://ops:9465/sd/cloud?port=9100
+        refresh_interval: 30s

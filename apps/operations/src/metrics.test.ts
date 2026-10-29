@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { createOpsMetrics, DB_SIZE_CACHE_MS } from './metrics.js';
+import { cloudTargets, createOpsMetrics, DB_SIZE_CACHE_MS } from './metrics.js';
 
 type Handler = (sql: string) => { rows: unknown[] } | Error;
 
@@ -70,5 +70,16 @@ describe('ops /metrics', () => {
     const { body } = await m.render();
     expect(sizeCalls()).toBe(2);
     expect(body.split('\n').some((l) => l.startsWith('cdr_supabase_db_size_bytes'))).toBe(false);
+  });
+});
+
+describe('cloud service discovery', () => {
+  it('lists the real cloud VMs with the scrape port and the role/slot labels of the mgmt role entries', async () => {
+    const { pool, query } = stubPool(() => ({ rows: [{ key: 'warm', ip: '203.0.113.5' }, { key: 'elastic-linode-1', ip: '203.0.113.6' }] }));
+    expect(await cloudTargets(pool, '9100')).toEqual([
+      { targets: ['203.0.113.5:9100'], labels: { role: 'cloud', slot: 'warm' } },
+      { targets: ['203.0.113.6:9100'], labels: { role: 'cloud', slot: 'elastic-linode-1' } },
+    ]);
+    expect(String(query.mock.calls[0]?.[0])).toContain('NOT i.simulated');
   });
 });

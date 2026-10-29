@@ -80,6 +80,18 @@ export function createOpsMetrics(pool: pg.Pool, now: () => number = Date.now) {
   return { render };
 }
 
+/** Prometheus HTTP service discovery of the real cloud VMs (one scrape port per job): the targets follow ops.instances, so a VM created or
+ *  released by a workflow is scraped (or dropped) within one refresh with no rendering step. Labels equal the mgmt role's file_sd entries. */
+export const SD_PORTS = ['9100', '9464'] as const;
+export async function cloudTargets(pool: pg.Pool, port: string): Promise<{ targets: string[]; labels: Record<string, string> }[]> {
+  const r = await pool.query<{ key: string; ip: string }>(
+    `SELECT s.key, split_part(i.public_ip::text, '/', 1) AS ip
+       FROM ops.capacity_slots s JOIN ops.instances i ON i.id = s.bound_instance_id
+      WHERE NOT i.simulated AND i.public_ip IS NOT NULL AND i.lifecycle_state IN ('deploying', 'ready', 'draining', 'unknown', 'failed') ORDER BY s.key`,
+  );
+  return r.rows.map((row) => ({ targets: [`${row.ip}:${port}`], labels: { role: 'cloud', slot: row.key } }));
+}
+
 /** Served on OPS_METRICS_PORT, a separate listener that is not published or routed through Caddy. */
 export function createMetricsApp(pool: pg.Pool): express.Express {
   const app = express();
@@ -88,6 +100,15 @@ export function createMetricsApp(pool: pg.Pool): express.Express {
   app.get('/metrics', async (_req, res) => {
     const { contentType, body } = await m.render();
     res.type(contentType).send(body);
+  });
+  app.get('/sd/cloud', async (req, res) => {
+    const port = String(req.query['port'] ?? '');
+    if (!(SD_PORTS as readonly string[]).includes(port)) return void res.status(400).json({ error: 'port must be one of ' + SD_PORTS.join(', ') });
+    try {
+      res.json(await cloudTargets(pool, port));
+    } catch {
+      res.status(503).json({ error: 'ops database unreadable' }); // Prometheus keeps its last targets on a non-200; never an empty list
+    }
   });
   return app;
 }
