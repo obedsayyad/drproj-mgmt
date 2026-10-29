@@ -5,10 +5,29 @@ set, every expected job must be up and freshly scraped; without it only the simu
 `metrics_fresh` flag of its state file (reported as metrics_source=simulation); real mode without a source is stale.
 """
 import json
+import re
 import urllib.request
 from datetime import datetime, timezone
 
 from cdr_db import call
+
+
+_TS = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}(?::?\d{2})?)$")
+
+
+def parse_scrape_time(value):
+    """Prometheus reports lastScrape with nanoseconds ("2026-10-29T15:31:20.790539617Z"); fromisoformat takes at most microseconds."""
+    m = _TS.match(value)
+    if not m:
+        raise ValueError(value)
+    off = m.group(3)
+    if off == "Z":
+        off = "+00:00"
+    elif len(off) == 3:
+        off += ":00"
+    elif len(off) == 5:
+        off = off[:3] + ":" + off[3:]
+    return datetime.fromisoformat(m.group(1) + (m.group(2) or "")[:7] + off)
 
 
 def prometheus_fresh(url, jobs, stale_after):
@@ -23,7 +42,10 @@ def prometheus_fresh(url, jobs, stale_after):
         if not mine:
             return False
         for t in mine:
-            scraped = datetime.fromisoformat(t["lastScrape"].replace("Z", "+00:00")[:32]) if t.get("lastScrape") else None
+            try:
+                scraped = parse_scrape_time(t["lastScrape"]) if t.get("lastScrape") else None
+            except ValueError:
+                return False  # an unreadable timestamp is not evidence of freshness
             if t.get("health") != "up" or scraped is None or (now - scraped).total_seconds() > stale_after:
                 return False
     return True
