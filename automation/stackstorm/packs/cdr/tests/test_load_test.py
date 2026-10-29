@@ -3,7 +3,7 @@ import json
 import pytest
 
 import load_test as action_mod
-from k6_host import LoadTestError, K6Host, check_bounds, parse_result
+from k6_host import LoadTestError, K6Host, check_bounds, parse_result, scenario_work_ms
 
 DEMO = {"max_rate_rps": 200, "max_duration_seconds": 600, "max_work_ms": 250, "default_work_ms": 100}
 GOOD = json.dumps({"p95_ms": 41.234, "error_rate": 0, "requests": 600, "achieved_rps": 9.99, "dropped_iterations": 0})
@@ -131,3 +131,8 @@ def test_stop_without_an_active_run_fails_not_running(monkeypatch):
     monkeypatch.setattr(action_mod.cdr_db, "call", lambda cfg, sql, params: (True, []))
     a = action_mod.LoadTest(config={"testing_ssh": {"host": "203.0.113.9", "user": "root", "key": "/k"}})
     assert a.run("stop", "op-1") == (False, "test_not_running")
+
+
+def test_only_the_surge_scenario_runs_at_the_policy_maximum_work():
+    assert scenario_work_ms(DEMO, "sustained_surge") == 250
+    assert {scenario_work_ms(DEMO, s) for s in ("smoke", "baseline", "compute_pressure", "recovery")} == {100}

@@ -4,7 +4,7 @@ import time
 
 import cdr_db
 from cdr_common import guarded, policy_section
-from k6_host import LoadTestError, K6Host, check_bounds
+from k6_host import LoadTestError, K6Host, check_bounds, scenario_work_ms
 from st2common.runners.base_action import Action
 
 POLL_SECONDS = 5
@@ -42,7 +42,7 @@ class LoadTest(Action):
             if not ok:
                 return False, demo
             rid, scenario, rate, duration, _ = rows[0]
-            work = demo["default_work_ms"]
+            work = scenario_work_ms(demo, scenario)
             err = check_bounds(demo, scenario, rate, duration, work)
             if err:
                 return False, err

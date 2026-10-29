@@ -15,6 +15,12 @@ class LoadTestError(Exception):
     pass
 
 
+def scenario_work_ms(demo, scenario):
+    """Per-request CPU work: sustained_surge runs at the policy maximum (it is the heavy scenario, and it keeps an instance's bounded work
+    queue full for max_work_ms x max_queued_work_items), every other scenario at the policy default."""
+    return demo["max_work_ms"] if scenario == "sustained_surge" else demo["default_work_ms"]
+
+
 def check_bounds(demo, scenario, rate, duration, work_ms):
     """Policy demo.* bounds. Returns a short code, or None when inside them."""
     if scenario not in SCENARIOS:
