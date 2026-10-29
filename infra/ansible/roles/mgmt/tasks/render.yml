@@ -66,6 +66,36 @@
     - { job: relief, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.app_metrics }}" }
     - { job: node, target: "{{ mgmt_primary_ip }}:{{ inputs.ports.node_exporter }}" }
 
+# Cloud instances (docs/08): one file per bound slot, regenerated on every run of this play. Prometheus must scrape the standby and every elastic
+# VM like the primary; stale files of released slots are removed below.
+- name: Read the real cloud instances to scrape (slot and public address)
+  ansible.builtin.shell: |
+    set -o pipefail
+    set -a; . {{ mgmt_ops_env_file }}; set +a
+    docker run --rm -e SUPABASE_OPS_URL -e PGSSLROOTCERT=/ca.crt -v {{ mgmt_supabase_ca }}:/ca.crt:ro postgres:17-alpine \
+      psql "$SUPABASE_OPS_URL" -At -F ' ' -c "SELECT s.key, split_part(i.public_ip, '/', 1) FROM ops.capacity_slots s
+        JOIN ops.instances i ON i.id = s.bound_instance_id WHERE NOT i.simulated AND i.public_ip IS NOT NULL
+        AND i.lifecycle_state IN ('deploying', 'ready', 'draining', 'unknown', 'failed') ORDER BY s.key"
+  args:
+    executable: /bin/bash
+  register: mgmt_cloud_scrape
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Write the file_sd targets for the cloud instances (relief, node_exporter)
+  ansible.builtin.copy:
+    content: |
+      [{"targets": ["{{ item.0[1] }}:{{ inputs.ports[item.1.port] }}"], "labels": {"role": "cloud", "slot": "{{ item.0[0] }}"}}]
+    dest: "{{ mgmt_src }}/monitoring/targets/{{ item.1.job }}/cloud-{{ item.0[0] }}.json"
+    mode: "0644"
+  loop: "{{ (mgmt_cloud_scrape.stdout_lines | default([])) | map('split', ' ') | list | product(mgmt_cloud_jobs) | list }}"
+  vars:
+    mgmt_cloud_jobs:
+      - { job: relief, port: app_metrics }
+      - { job: node, port: node_exporter }
+  when: not ansible_check_mode
+
 - name: Write the file_sd targets for the load balancer (HAProxy exporter :8404, public app certificate probe)
   ansible.builtin.copy:
     content: "{{ item.content }}"
