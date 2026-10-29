@@ -2,21 +2,22 @@
 
 Run 2026-10-29 ~11:25-14:35Z from the management VM (`103.141.79.170`) against DigitalOcean and Linode. This was the first run with real provider tokens. Nothing secret is recorded here: tokens live only in `/etc/drproj/secrets/providers.env` (0600, management) and the runner container environment.
 
-**Status: PARTIAL.** The DigitalOcean warm standby is created, deployed, ready and UP as `warm_bk`. The task was meant to create nothing on Linode; the stack created one Linode VM by itself (below) and that VM still exists. T28 is partial: no single uninterrupted run from an empty warm slot to a verified backup was achieved, so the 8 minute RTO is not shown end to end.
+**Status: DONE, T28 partial.** The DigitalOcean warm standby is created, deployed, ready and UP as `warm_bk`. The task was meant to create nothing on Linode; the stack created Linode VMs by itself (below). The last one was adopted and released through the designed path (T29 / orphan adoption, section below), and Linode is back to 0 instances. T28 is partial: no single uninterrupted run from an empty warm slot to a verified backup was achieved, so the 8 minute RTO is not shown end to end.
 
-## Final state (checked 14:30-14:35Z)
+## Final state (checked 14:30-14:35Z; Linode and incident rows rechecked 15:50Z after the adoption)
 
 | Check | Result |
 |---|---|
 | `ops.instances` warm | digitalocean, droplet `613847824`, fra1, `s-1vcpu-1gb-intel`, `debian-13-x64`, `simulated=false`, lifecycle `ready`, routing `backup`, address `159.89.104.79` |
-| `/api/overview` capacity | `warm_ready=1`, `occupied_digitalocean=1`; `occupied_linode=1` is the stuck interim reservation (see Open items); providers `fresh` |
+| `/api/overview` capacity | `warm_ready=1`, `occupied_digitalocean=1`, `occupied_linode=0`; all five integrations `fresh` |
 | HAProxy (Runtime API `show servers state`) | `warm_bk` `159.89.104.79:8443` UP, admin state 0; `warm_act` maint; `iwarm_*` maint at 0.0.0.0 |
 | `curl --cacert /etc/drproj/ca/ca-bundle.crt https://159.89.104.79:8443/health/ready` | 200, `instance_id` equals the recorded instance |
 | Prometheus targets | `relief` and `node` up for the primary and for `159.89.104.79` (cloud targets `cloud-warm.json`) |
 | Alerts firing | none (Prometheus `/api/v1/alerts` empty) |
 | DigitalOcean droplets tagged `project:cdr` | exactly 1 (`613847824`, tags `slot:warm`, `op:3d2bf209…`, `attempt:1`) |
-| Terraform state | `/var/lib/drproj/terraform/digitalocean/warm/` dir 0700, `terraform.tfstate` 0600, one `digitalocean_droplet` in state |
-| Linode instances | **1: `109576462` (`interim-warm-linode`) still exists** (Open items) |
+| Terraform state | `/var/lib/drproj/terraform/digitalocean/warm/` dir 0700, `terraform.tfstate` 0600, one `digitalocean_droplet` in state; nothing else under `/var/lib/drproj/terraform` (the empty `linode/interim-warm-linode` directory was removed after the release) |
+| Linode instances | 0; slot `interim-warm-linode` free |
+| Open incidents | none |
 
 ## Substitutions and deviations from the task inputs
 
@@ -62,6 +63,7 @@ Component times add up to well under the 8 minute RTO (create ~40 s + first depl
 9. Reconcile opened `provider.unconfigured:*` but never resolved it; it now resolves the incident when the provider scans OK.
 10. Cloud node_exporter used a random per-host basic-auth password while Prometheus holds one; cloud VMs now adopt the shared scrape password, and the stack is recreated when its web config is replaced.
 11. File_sd scrape targets existed only for the primary; the mgmt role now writes `cloud-<slot>.json` for bound cloud instances (regenerated on each run of the play; files of released slots are not removed automatically).
+12. Reconcile ignored a `reserved` slot whose owner operation had already ended; the Prometheus freshness gate could not parse nanosecond timestamps (every real scale-in/scale-out gate would have failed); scale-in tried to drain a slot routed `none` (see the adoption section).
 
 ## Mistakes during the run (recorded, not hidden)
 
@@ -69,13 +71,23 @@ Component times add up to well under the 8 minute RTO (create ~40 s + first depl
 - The size availability gap in the preflight (above).
 - Runner container recreations and `mgmt.yml` runs while alert-driven repairs were in flight killed those workflows (`workflow_error`) and left the Linode VM above.
 
+## Orphan adoption and release (T29), executed 15:26-15:46Z
+
+The Linode VM `109576462` (tags `project:cdr`, `slot:interim-warm-linode`, `op:812b260d…`, `attempt:1`) had no Terraform state and its slot was `reserved` by an operation that had already failed. The operator approved adoption (not a hand delete). Steps, as run:
+
+1. **Ownership** confirmed from the provider tags and the operation record. A direct provider delete was attempted first and refused by the session's permission check; it was not retried.
+2. **Reconcile gap found.** Reconcile treated a `reserved` slot as dead only when its operation was non-terminal, so a slot reserved by an operation that had already ended was never touched. Fixed (such a slot is marked `held_uncertain` and resolved with provider evidence; test `test_reconcile_holds_and_binds_a_reserved_slot_whose_operation_already_ended`).
+3. **`terraform import`** from the runner as uid st2, into the slot's own state: `terraform init -reconfigure -backend-config=path=…/linode/interim-warm-linode/terraform.tfstate` in `infra/terraform/slot-linode`, then `terraform import` of `module.linode_instance[0].linode_instance.this` with id `109576462` and the original `op`/`attempt`/`slot` variables (state backed up first as `backups/pre-import-…`). A plan with `exists=true` then wants to replace the instance (`image` and `authorized_keys` are not importable on Linode); that is irrelevant for the release, which applies `exists=false` (destroy only). State files stay 0600.
+4. **Bind via reconcile (about 15:30Z):** `held_uncertain → bound`, one resource matching a recorded attempt of that slot (`ops.resolve_held_slot` with provider evidence, attempt row `started → failed`, no delete issued).
+5. **Release by the designed path.** With `warm` bound and ready, reconcile requests `scale_in` of the surplus interim slot (`ops.scale_in_candidate()` prefers it). Three attempts died on bugs that real data exposed for the first time, each fixed with a test: `de7be41c` (the Prometheus freshness check could not parse the nanosecond `lastScrape`), `e0d884bb` (an interim slot routed `none` cannot go to `draining`; scale-in now skips the drain for a slot routed `none`), `0cd41f2b` (started before the sync of that fix). Attempt `41bd6f5c` succeeded: 15:44:53 queued, lease at generation 222 at 15:45:09, `begin_slot_release`, `run_heavy terraform_apply exists=false`, `delete_slot_resource` (provider `get` absent and `list_by_tag` empty), `release_slot`, event `VM deleted and absence confirmed through the provider API; slot released` at 15:46:13, `operation.succeeded` 15:46:15 (82 s).
+6. **After:** Linode instances 0, slot `interim-warm-linode` free, Terraform state for it held no resources and its directory was removed, and the five Linode incidents were resolved with `cdr.resolve_incident` (`orphan:linode:109576462`, `standby.repair_failed:interim-warm-linode`, `provision.exhausted:627a3ae2…`, `…43337583…`, `…943fb995…`).
+
 ## Incidents
 
-Resolved through `cdr.resolve_incident` (StackStorm): `provider.unconfigured:digitalocean`, `provider.unconfigured:linode` (by reconcile), `standby.uncertain:warm`, `standby.repair_failed:warm`, `provision.uncertain:warm`.
-Still open: `orphan:linode:109576462`, `standby.repair_failed:interim-warm-linode`, `provision.exhausted:627a3ae2…`, `provision.exhausted:43337583…`, `provision.exhausted:943fb995…`. All five concern the Linode interim VM.
+Resolved by reconcile: `provider.unconfigured:digitalocean`, `provider.unconfigured:linode`. Resolved through `cdr.resolve_incident`: `standby.uncertain:warm`, `standby.repair_failed:warm`, `provision.uncertain:warm` (warm standby healthy), and the five Linode incidents above. None open.
 
 ## Open items
 
-1. Linode VM `109576462` (`interim-warm-linode`, tags `project:cdr`, `slot:interim-warm-linode`, `op:812b260d…`) is running and billable. docs/15 section 1 step 6 says an operator confirms ownership and deletes through the provider (or imports it); a delete attempt from this session was refused, so it is waiting for the operator. After deletion reconcile frees the slot, the five incidents are resolved, and `/var/lib/drproj/terraform/linode/` (empty state) is removed.
-2. No clean from-empty run to measure the RTO.
-3. The runner image digest was bumped six times; the final pin is in `config/deployment-inputs.example.json` and the management copy.
+1. No clean from-empty run to measure the RTO (T28 stays partial).
+2. A held `warm` slot still makes the stack build an interim standby on the other provider by itself. That is the designed behavior, but it means a failed first attempt can create a VM on the second provider (docs/15 section 8a, step 5).
+3. The runner image digest was bumped six times; the final pin is in `config/deployment-inputs.example.json` and the management copy. Cloud file_sd targets are regenerated by the `mgmt` role, not by a workflow, and files of released slots are not removed automatically.
