@@ -44,6 +44,14 @@ ENV ANSIBLE_COLLECTIONS_PATH=/opt/ansible/collections
 COPY infra/ansible /opt/drproj/ansible
 RUN chmod -R a+rX /opt/drproj && chmod a+x /opt/drproj/ansible/inventory/cloud_app.py
 
+# Guarded Terraform wrapper and the two per-provider slot roots (+ modules). tf-slot.sh resolves ../infra/terraform/<root> from its own path, so
+# the layout under /opt/drproj mirrors the repository. `terraform init` writes .terraform/ into the root it runs in, so st2 owns the roots; the
+# state itself lives in the TF_STATE_DIR mount (compose.ansible.yaml), never in the image.
+COPY scripts/tf-slot.sh /opt/drproj/scripts/tf-slot.sh
+COPY infra/terraform /opt/drproj/infra/terraform
+RUN chmod a+x /opt/drproj/scripts/tf-slot.sh && rm -rf /opt/drproj/infra/terraform/*/tests /opt/drproj/infra/terraform/modules/*/tests \
+ && chown -R st2:st2 /opt/drproj/infra/terraform && chmod -R a+rX /opt/drproj
+
 # PostgreSQL client from PGDG, same major as the Supabase server (postgres_server_major) for pg_dump/pg_restore.
 RUN install -d /usr/share/postgresql-common/pgdg \
  && curl -fsSLo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \

@@ -28,6 +28,8 @@ services:
       - ${SUPABASE_CA_HOST:?set SUPABASE_CA_HOST}:/etc/drproj/supabase-root-2021.crt:ro
       # Versioned HAProxy membership store (docs/08): the dir must exist first, 0700, owned by the st2 uid (the mgmt role creates it).
       - ${HAPROXY_STATE_HOST:?set HAPROXY_STATE_HOST to /var/lib/drproj/haproxy-state}:/var/lib/drproj/haproxy-state
+      # Terraform state, one directory per provider and slot (docs/07): host path == container path (the pack's real_adapter.tf_state_dir), 0700 owned by the st2 uid.
+      - ${TF_STATE_HOST:-/var/lib/drproj/terraform}:/var/lib/drproj/terraform
     environment:
       # Names only; values come from the management .env (mode 0600). Read by ansible-playbook through AnsibleRunner's allow-list.
       SUPABASE_APP_URL: ${SUPABASE_APP_URL:-}
