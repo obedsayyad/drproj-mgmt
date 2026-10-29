@@ -575,6 +575,19 @@ def test_reconcile_resolves_a_held_slot_to_bound_when_the_provider_lists_the_att
     assert db.execute("SELECT count(*) FROM ops.incidents").fetchone()[0] == 0 and sim.calls("delete") == []
 
 
+def test_reconcile_holds_and_binds_a_reserved_slot_whose_operation_already_ended(db, sim, tmp_path):
+    """The operation failed (or was killed) without marking its slot: the slot stays `reserved` for an operation that can do nothing more."""
+    op, gen, key, sgen = attempt_slot(db, tmp_path, "digitalocean")
+    rid = sim.create("digitalocean", key, op, 1, tags_for(key, op, 1), {})["resource_id"]
+    db.execute("UPDATE ops.operations SET status = 'failed' WHERE id = %s::uuid", (op,))
+    db.execute("SELECT ops.release_lease(%s::uuid, %s)", (op, gen))
+    assert db.execute("SELECT state FROM ops.capacity_slots WHERE key = %s", (key,)).fetchone()[0] == "reserved"
+    _, _, out = rpass(db, tmp_path, FakeApi())
+    assert out["resolved_slots"] == [{"slot": key, "outcome": "bound", "resource_id": rid}] and not out["orphans"]
+    assert db.execute("SELECT status FROM ops.operation_attempts WHERE operation_id = %s::uuid", (op,)).fetchone()[0] == "failed"
+    assert sim.calls("delete") == []
+
+
 def test_reconcile_frees_a_held_slot_only_when_a_provider_listing_shows_it_absent(db, sim, tmp_path):
     op, key, _ = held_slot(db, sim, tmp_path, create=False)
     faults = tmp_path / "faults.json"

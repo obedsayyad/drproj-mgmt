@@ -239,11 +239,15 @@ class ReconcilePass(Action):
         if len(self.summary["providers_unconfigured"]) == 2:
             self.summary["noop_reason"] = "providers_unconfigured"
         explained = {r[5] for r in slots.values() if r[3] != "free" and r[5]}
+        # A slot can stay `reserved` by an operation that already ended (failed or killed in a way that skipped its own mark_slot_uncertain):
+        # that operation can do nothing more, so it is as dead as one found running without an execution.
+        owners = sorted({r[4] for r in slots.values() if r[3] == "reserved" and r[4] and r[4] not in keep_ops and r[4] not in handled["dead"]})
+        ended = {r[0] for r in self._q("SELECT id::text FROM ops.operations WHERE id = ANY(%s::uuid[]) AND status IN ('succeeded', 'failed', 'cancelled')", (owners,))} if owners else set()
         for key, (_k, gen, provider, state, owner, rid, _sim) in sorted(slots.items()):
             if provider not in listings or owner in keep_ops:
                 continue
             self.keeper_check()
-            if state == "reserved" and owner in handled["dead"]:
+            if state == "reserved" and (owner in handled["dead"] or owner in ended):
                 self._w("SELECT ops.mark_slot_uncertain(%s::uuid, %s, %s, %s, 'operation_interrupted', %s)", (self.op, self.gen, key, gen, self.app))
                 state = "held_uncertain"
             if state == "held_uncertain":
