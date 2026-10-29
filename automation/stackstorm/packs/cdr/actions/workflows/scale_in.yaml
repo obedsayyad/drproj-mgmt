@@ -391,7 +391,7 @@ tasks:
       - when: <% succeeded() and not result().result.regressed %>
         publish:
           - recovery: <% result().result %>
-        do: recover_done
+        do: recover_verifying
       - when: <% succeeded() and result().result.regressed %>
         publish:
           - recovery: <% result().result %>
@@ -407,6 +407,36 @@ tasks:
       lease_generation: <% ctx().generation %>
       target: warm
       mode: active
+    next:
+      - when: <% succeeded() %>
+        do: recover_verifying_reverted
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  recover_verifying:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: primary alone served for the observation window
+    next:
+      - when: <% succeeded() %>
+        do: recover_done
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+  recover_verifying_reverted:
+    action: cdr.update_ops_state
+    input:
+      operation_id: <% ctx().operation_id %>
+      event_type: operation.step.completed
+      step: verify
+      status: verifying
+      message: warm standby routed back to overflow
     next:
       - when: <% succeeded() %>
         do: recover_reverted

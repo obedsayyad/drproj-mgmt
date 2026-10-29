@@ -431,6 +431,7 @@ def test_overload_only_recovery_returns_the_warm_standby_to_backup_and_deletes_n
     status, ran = recover(py({"regressed": False, "cpu_percent": 3.1}))
     assert routing_modes(ran) == [("warm", "backup")]
     assert last_outcome(ran, "operation.succeeded")["outcome"]["recovered"] is True
+    assert events_of(ran)[-2:] == ["operation.step.completed", "operation.succeeded"]  # running -> verifying -> succeeded (the SQL transition table)
     assert names(ran)[-1] == "release" and released_with_generation(ran)
     assert not set(ran_actions(ran)) & {"cdr.run_heavy", "cdr.delete_slot_resource", "cdr.begin_slot_release", "cdr.drain_instance"}
 
@@ -440,6 +441,7 @@ def test_overload_only_recovery_reverts_to_overflow_on_regression():
     assert routing_modes(ran) == [("warm", "backup"), ("warm", "active")]
     out = last_outcome(ran, "operation.succeeded")["outcome"]
     assert out["recovered"] is False and out["reverted_to_overflow"] is True and out["observation"]["reason"] == "cpu_high"
+    assert events_of(ran)[-2:] == ["operation.step.completed", "operation.succeeded"]
     assert names(ran)[-1] == "release"
 
 
