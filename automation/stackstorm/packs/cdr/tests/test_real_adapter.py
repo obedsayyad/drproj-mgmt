@@ -521,7 +521,7 @@ def test_ansible_deploy_environment_is_scrubbed_and_passes_only_the_named_secret
     op, gen, iid = bound_real_instance(db, sim)
     real_heavy(sim, env).run("ansible_deploy", "heavy", op, gen, "digitalocean", RID)
     names = ans["env"].read_text().split()
-    assert "SUPABASE_APP_URL" in names and "DR_AUTOMATION_URL" in names and "CLOUD_VM_SSH_KEY_FILE" in names
+    assert "SUPABASE_APP_URL" in names and "DR_AUTOMATION_URL" in names and "CLOUD_VM_SSH_KEY_FILE" in names and "CLOUD_APP_INPUTS_FILE" in names
     assert "ANSIBLE_STDOUT_CALLBACK" in names and "ANSIBLE_SHOW_CUSTOM_STATS" in names
     assert "DIGITALOCEAN_TOKEN" not in names  # provider API tokens are Terraform's, not Ansible's
     assert apply_args(env) == []  # no Terraform

@@ -23,6 +23,8 @@ services:
       # Management->LB key and pinned host key: the routing adapter copies each membership dump to the LB (docs/08, LB state sync).
       - ${MGMT_SECRETS_DIR:-./secrets}/lb_ssh_key:/run/secrets/lb_ssh_key:ro
       - ${MGMT_SECRETS_DIR:-./secrets}/lb_known_hosts:/run/secrets/lb_known_hosts:ro
+      # Pinned management host key: the ca role delegates leaf signing to the management VM over SSH (inventory/cloud_app.py `management` group).
+      - ${MGMT_SECRETS_DIR:-./secrets}/mgmt_known_hosts:/run/secrets/mgmt_known_hosts:ro
       - ${MGMT_SECRETS_DIR:-./secrets}/runner-client.crt:/run/secrets/haproxy-client.crt:ro
       - ${MGMT_SECRETS_DIR:-./secrets}/runner-client.key:/run/secrets/haproxy-client.key:ro
       - ${SUPABASE_CA_HOST:?set SUPABASE_CA_HOST}:/etc/drproj/supabase-root-2021.crt:ro

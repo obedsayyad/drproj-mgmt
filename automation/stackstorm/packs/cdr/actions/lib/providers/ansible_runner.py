@@ -55,6 +55,7 @@ class AnsibleRunner:
         env["ANSIBLE_SHOW_CUSTOM_STATS"] = "1"
         env["ANSIBLE_NOCOLOR"] = "1"
         env["CLOUD_VM_SSH_KEY_FILE"] = self.ssh_key_path
+        env["CLOUD_APP_INPUTS_FILE"] = self.inputs_path  # the inventory script derives the management host (CA signing) from it
         if self.ops_url:
             env["DR_AUTOMATION_URL"] = self.ops_url
         return env

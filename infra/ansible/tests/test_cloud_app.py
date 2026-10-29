@@ -89,3 +89,17 @@ def test_fetch_reexecs_under_the_ansible_venv_python_when_the_driver_is_missing(
 def test_query_uses_the_capacity_slots_key_column():
     # ops.capacity_slots names its primary key `key` (0002_ops_schema.sql); there is no slot_key column on it.
     assert "s.key AS slot_key" in inv.QUERY and "s.slot_key" not in inv.QUERY
+
+
+def test_management_group_is_derived_from_the_inputs_for_ca_delegation(monkeypatch):
+    monkeypatch.setenv("CLOUD_VM_SSH_KEY_FILE", "/run/secrets/key")
+    out = inv.build(ROWS, {"hosts": {"management": {"public_ip": "203.0.113.50", "ssh_user": "root"}}})
+    assert out["management"] == {"hosts": ["management-vm"]}
+    hv = out["_meta"]["hostvars"]["management-vm"]
+    assert hv["ansible_host"] == "203.0.113.50" and hv["ansible_user"] == "root" and hv["ansible_ssh_private_key_file"] == "/run/secrets/key"
+    assert "StrictHostKeyChecking=yes" in hv["ansible_ssh_common_args"] and inv.MGMT_KNOWN_HOSTS in hv["ansible_ssh_common_args"]
+    assert "management-vm" not in out["cloud_app"]["hosts"]
+
+
+def test_no_management_group_without_a_management_address():
+    assert "management" not in inv.build(ROWS, None) and "management" not in inv.build(ROWS, {"hosts": {"management": {"public_ip": None}}})

@@ -44,7 +44,28 @@ def fetch(url):
         return conn.execute(QUERY).fetchall()
 
 
-def build(rows):
+# The CA (key and signing) lives on the management VM only (docs/08). The runner is not that VM, so the ca role's delegated tasks reach it over SSH:
+# the inventory adds a `management` group from the deployment inputs, authenticated with the same key and pinned in a known_hosts file
+# the mgmt role writes (StrictHostKeyChecking=yes).
+MGMT_KNOWN_HOSTS = "/run/secrets/mgmt_known_hosts"
+INPUTS_ENV = "CLOUD_APP_INPUTS_FILE"
+
+
+def management_host(inputs):
+    host = ((inputs or {}).get("hosts") or {}).get("management") or {}
+    if not host.get("public_ip"):
+        return None
+    hv = {
+        "ansible_host": str(host["public_ip"]).split("/")[0],
+        "ansible_user": host.get("ssh_user") or "root",
+        "ansible_ssh_common_args": f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={MGMT_KNOWN_HOSTS}",
+    }
+    if os.environ.get(SSH_KEY_ENV):
+        hv["ansible_ssh_private_key_file"] = os.environ[SSH_KEY_ENV]
+    return hv
+
+
+def build(rows, inputs=None):
     hostvars = {}
     for instance_id, slot_key, provider, ip, digest in rows:
         hostvars[instance_id] = {
@@ -57,7 +78,20 @@ def build(rows):
         }
         if os.environ.get(SSH_KEY_ENV):
             hostvars[instance_id]["ansible_ssh_private_key_file"] = os.environ[SSH_KEY_ENV]
-    return {"cloud_app": {"hosts": sorted(hostvars)}, "_meta": {"hostvars": hostvars}}
+    out = {"cloud_app": {"hosts": sorted(hostvars)}, "_meta": {"hostvars": hostvars}}
+    mgmt = management_host(inputs)
+    if mgmt:
+        out["management"] = {"hosts": ["management-vm"]}
+        hostvars["management-vm"] = mgmt
+    return out
+
+
+def load_inputs():
+    path = os.environ.get(INPUTS_ENV)
+    if not path:
+        return None
+    with open(path) as f:
+        return json.load(f)
 
 
 def main(argv=None):
@@ -71,7 +105,7 @@ def main(argv=None):
         print("cloud_app: DR_AUTOMATION_URL is not set", file=sys.stderr)
         return 1
     try:
-        inv = build(fetch(url))
+        inv = build(fetch(url), load_inputs())
     except Exception as exc:  # noqa: BLE001 - driver messages can carry the connection string; print the type only
         print(f"cloud_app: database read failed ({type(exc).__name__})", file=sys.stderr)
         return 1

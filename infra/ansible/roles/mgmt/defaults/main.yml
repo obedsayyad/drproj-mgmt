@@ -57,6 +57,7 @@ mgmt_secret_owners:
   - { file: cdr-pack-config.yaml, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: lb_ssh_key, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: lb_known_hosts, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
+  - { file: mgmt_known_hosts, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: cloud_vm_key, owner: "{{ mgmt_st2_uid }}", group: "{{ mgmt_st2_gid }}", mode: "0600" }
   - { file: grafana_admin_password, owner: "{{ mgmt_grafana_uid }}", group: "0", mode: "0600" }
   - { file: node_exporter_scrape_password, owner: "{{ mgmt_nobody_uid }}", group: "{{ mgmt_nobody_uid }}", mode: "0600" }
