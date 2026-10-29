@@ -10,12 +10,12 @@ import { OperatorProvider, useOperator } from './shared';
 
 const TABS = [
   ['overview', 'Overview'],
-  ['operations', 'Operations'],
+  ['operations', 'Activity'],
   ['instances', 'Servers'],
-  ['policies', 'Policy'],
+  ['policies', 'Settings'],
   ['backups', 'Backups'],
   ['tests', 'Load tests'],
-  ['incidents', 'Incidents'],
+  ['incidents', 'Problems'],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
@@ -39,7 +39,7 @@ export function App() {
           ))}
         </nav>
         <main>
-          {tab === 'overview' && <OverviewView />}
+          {tab === 'overview' && <OverviewView onOpenProblems={() => setTab('incidents')} />}
           {tab === 'operations' && <OperationsView />}
           {tab === 'instances' && <InstancesView />}
           {tab === 'policies' && <PoliciesView />}

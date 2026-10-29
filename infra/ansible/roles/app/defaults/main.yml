@@ -17,3 +17,17 @@ app_ready_delay: 5
 app_container: drproj-app-relief-1
 app_demo_mode: false
 app_supabase_ca_src: /etc/drproj/ca/supabase-root-2021.crt
+
+# Friendly identity shown in the relief header (non-secret; no addresses). Fixed hosts set app_instance_provider/label in group_vars; cloud VMs
+# derive them from the inventory's provider and slot_key (warm -> backup server, elastic-<provider>-N -> extra server N).
+app_region_names: {fra1: Frankfurt, eu-central: Frankfurt}
+app_instance_provider: "{{ provider | default('self_hosted') }}"
+app_instance_role: >-
+  {{ 'primary' if 'primary' in group_names else ('warm' if 'warm' in (slot_key | default('')) else 'elastic') }}
+app_instance_label: >-
+  {{ 'Main server' if app_instance_role == 'primary' else ('Backup server' if app_instance_role == 'warm'
+     else 'Extra server ' ~ ((slot_key | default('')) | regex_search('[0-9]+$') | default('', true))) | trim }}
+app_provider_region: "{{ (inputs.cloud_application[app_instance_provider] | default({})).region | default('') }}"
+app_instance_region: >-
+  {{ (inputs.hosts.primary.location | default('self-hosted (Pune DC)', true)) if app_instance_provider == 'self_hosted'
+     else (app_provider_region ~ (' (' ~ app_region_names[app_provider_region] ~ ')' if app_provider_region in app_region_names else '')) }}
