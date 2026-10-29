@@ -84,6 +84,48 @@ def test_classify_healthy_app_broken_powered_off_and_absent_follow_the_provider_
     assert out["evidence"]["confirmed_absent"] is True and out["evidence"]["source"] == "provider_api" and out["evidence"]["simulated"] is True
 
 
+class _RealLike:
+    """The simulation's provider answers behind the REAL adapter's contract: not simulated, no pinned_digest(), readiness only with the address."""
+
+    simulated = False
+    mode = "real"
+
+    def __init__(self, sim, ready=True):
+        self._sim, self._ready, self.seen_ip = sim, ready, None
+
+    def __getattr__(self, name):
+        if name == "pinned_digest":
+            raise NotImplementedError
+        return getattr(self._sim, name)
+
+    def get(self, provider, resource_id):
+        return {**self._sim.get(provider, resource_id), "ip": "203.0.113.9"}
+
+    def check_ready(self, provider, resource_id, ip=None):
+        self.seen_ip = ip
+        if not ip:
+            return {"state": "unknown"}
+        return {"state": "ready" if self._ready else "not_ready", "identity": resource_id}
+
+
+def test_classify_real_adapter_uses_the_instance_address_and_the_recorded_digests(db, sim, tmp_path, monkeypatch):
+    import standby_classify
+
+    _key, rid = deployed_warm(db, sim, tmp_path)
+    real = _RealLike(sim)
+    monkeypatch.setattr(standby_classify.providers, "load", lambda _cfg: real)
+    db.execute("INSERT INTO ops.instances (provider, role, lifecycle_state, image_digest) VALUES ('self_hosted', 'primary', 'ready', 'sha256:" + "a" * 64 + "')")
+    db.execute("UPDATE ops.instances SET image_digest = NULL WHERE slot_key = 'warm'")
+    out = classify(db, tmp_path, simulation_faults=faults(tmp_path, READY_NOW))
+    assert out["class"] == "app_broken", out  # ready, but no recorded digest yet: redeploy records it
+    assert real.seen_ip == "203.0.113.9"
+    db.execute("UPDATE ops.instances SET image_digest = 'sha256:" + "a" * 64 + "' WHERE slot_key = 'warm'")
+    out = classify(db, tmp_path, simulation_faults=faults(tmp_path, READY_NOW))
+    assert out["class"] == "healthy" and out["image_digest"] == "sha256:" + "a" * 64
+    real._ready = False
+    assert classify(db, tmp_path, simulation_faults=faults(tmp_path, READY_NOW))["class"] == "app_broken"
+
+
 @pytest.mark.parametrize("fault", [{"api_unknown": True}, {"unavailable": True}])
 def test_classify_unknown_when_the_provider_does_not_answer_and_never_reports_absent(db, sim, tmp_path, fault):
     deployed_warm(db, sim, tmp_path)

@@ -75,9 +75,22 @@ class StandbyClassify(Action):
             return True, {**base, "class": "absent", "evidence": evidence}
         if got.get("power") == "off":
             return True, {**base, "class": "powered_off"}
-        check = adapter.check_ready(provider, rid)
+        if adapter.simulated:
+            check = adapter.check_ready(provider, rid)
+            deployed, pinned = check.get("image_digest"), adapter.pinned_digest()
+        else:
+            # Real adapter: /health/ready needs the instance address, and the digests are the ones the deploys recorded (as standby_verify does):
+            # the instance's own recorded digest must equal the primary's. A missing record reads as "not deployed yet", i.e. app_broken -> redeploy.
+            check = adapter.check_ready(provider, rid, ip=got.get("ip"))
+            ok, mine = call(self.config, "SELECT i.image_digest FROM ops.capacity_slots s JOIN ops.instances i ON i.id = s.bound_instance_id WHERE s.key = %s", (key,))
+            if not ok:
+                return False, mine
+            ok, prim = call(self.config, "SELECT image_digest FROM ops.instances WHERE role = 'primary' AND image_digest IS NOT NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 1", ())
+            if not ok:
+                return False, prim
+            deployed, pinned = (mine[0][0] if mine else None), (prim[0][0] if prim else None)
         if check["state"] == "unknown":
             return True, {**base, "class": "unknown", "reason": "readiness_unknown"}
-        if check["state"] == "ready" and check.get("image_digest") == adapter.pinned_digest():
-            return True, {**base, "class": "healthy", "image_digest": check["image_digest"]}
+        if check["state"] == "ready" and pinned is not None and deployed == pinned:
+            return True, {**base, "class": "healthy", "image_digest": deployed}
         return True, {**base, "class": "app_broken"}
