@@ -704,6 +704,21 @@ def test_reconcile_with_one_provider_unconfigured_scans_the_other_and_is_not_a_n
     assert len(responses.calls) == 1 and "linode" in responses.calls[0].request.url
 
 
+@responses.activate
+def test_reconcile_resolves_the_unconfigured_incidents_once_the_tokens_exist(db, tmp_path, env, monkeypatch):
+    monkeypatch.setenv("T_DO_TOKEN", "t-do")
+    monkeypatch.setenv("T_LI_TOKEN", "t-li")
+    for fp in ("provider.unconfigured:digitalocean", "provider.unconfigured:linode"):
+        db.execute("SELECT incident_id FROM ops.open_incident(%s, 'warning', 'reconciliation', 'no token', ARRAY[]::text[], NULL)", (fp,))
+    assert len(_unconfigured_incidents(db)) == 2
+    responses.add(responses.GET, re.compile(r"https://api\.digitalocean\.com/v2/droplets.*"), json={"droplets": [], "links": {}, "meta": {"total": 0}}, status=200)
+    responses.add(responses.GET, re.compile(r"https://api\.linode\.com/v4/linode/instances.*"), json={"data": [], "pages": 1}, status=200)
+    run = _real_reconcile(env, monkeypatch, db, tmp_path)
+    _, _, out = run()
+    assert out["providers_unconfigured"] == [] and _unconfigured_incidents(db) == []
+    run()  # a healthy tick writes no further resolve events
+
+
 # ------------------------------------------------------------------ run_heavy restore_probe (T18 heavy half; needs the real pg_dump/pg_restore, same major as the server)
 def _probe(db, tmp_path, gen_delta=0, lease=None, **cfg):
     from run_heavy import RunHeavy

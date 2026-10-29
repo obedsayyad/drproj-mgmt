@@ -228,6 +228,7 @@ class ReconcilePass(Action):
             res = self.adapter.list_by_tag(provider, dict(PROJECT_TAG))
             if res["state"] == "ok":
                 listings[provider] = res["resources"]
+                self._resolve_incident(f"provider.unconfigured:{provider}", f"{provider} API token configured and scanned")
             else:
                 self.summary["providers_skipped"].append(provider)
                 if res.get("code") == "provider_unconfigured":
@@ -387,6 +388,11 @@ class ReconcilePass(Action):
         self._incident(f"orphan:{provider}:{rid}", "critical",
                        f"project-tagged resource {rid} on {provider} (slot tag {slot or 'none'}, op tag {tags.get('op') or 'none'}) is explained by no slot or operation;"
                        " it is not deleted. Follow the 'Adopt tagged orphans' runbook (docs/15 section 1)", [rid] + ([slot] if slot else []))
+
+    def _resolve_incident(self, fingerprint, message):
+        # resolve only an open incident, so a healthy tick writes nothing
+        if self._q("SELECT 1 FROM ops.incidents WHERE fingerprint = %s AND state = 'open'", (fingerprint,)):
+            self._w("SELECT ops.resolve_incident(%s, %s, %s::uuid)", (fingerprint, message, self.op))
 
     def _incident(self, fingerprint, severity, text, resources):
         # one clear incident for a recurring unresolved condition: an already open one gets no new event per tick
