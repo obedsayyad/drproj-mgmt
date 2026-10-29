@@ -1,5 +1,6 @@
 """Recheck under the lock before scale-in (docs/04): maintenance, primary outage (T22), stale metrics, remaining capacity,
-candidate. proceed=false carries the noop_reason for a succeeded no-op. The candidate is the newest bound elastic slot
+candidate (routing_mode tells the workflow whether it has anything to drain: a slot routed `none`, e.g. a surplus interim standby, goes
+straight to its release). proceed=false carries the noop_reason for a succeeded no-op. The candidate is the newest bound elastic slot
 (ops.scale_in_candidate); the warm, interim-warm and primary are never candidates.
 
 Primary outage = an open `primary.unhealthy:*` incident, or a non-terminal primary_failure/failback operation. Low traffic
@@ -63,7 +64,7 @@ class ScaleInGate(Action):
             return True, {"proceed": False, "noop_reason": "warm_not_ready"}
         ok, rows = call(
             self.config,
-            "SELECT c.key, c.generation, c.provider, i.provider_resource_id FROM ops.capacity_slots c JOIN ops.instances i ON i.id = c.bound_instance_id"
+            "SELECT c.key, c.generation, c.provider, i.provider_resource_id, i.routing_mode FROM ops.capacity_slots c JOIN ops.instances i ON i.id = c.bound_instance_id"
             " WHERE c.key = ops.scale_in_candidate()",
             (),
         )
@@ -71,5 +72,6 @@ class ScaleInGate(Action):
             return False, rows
         if not rows:
             return True, {"proceed": False, "noop_reason": "no_candidate"}
-        key, generation, provider, resource_id = rows[0]
-        return True, {"proceed": True, "slot_key": key, "slot_generation": generation, "provider": provider, "resource_id": resource_id or "", "metrics_source": m["source"]}
+        key, generation, provider, resource_id, routing_mode = rows[0]
+        return True, {"proceed": True, "slot_key": key, "slot_generation": generation, "provider": provider, "resource_id": resource_id or "",
+                      "routing_mode": routing_mode, "metrics_source": m["source"]}

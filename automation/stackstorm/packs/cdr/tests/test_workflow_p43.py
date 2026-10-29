@@ -46,6 +46,16 @@ def test_scale_in_happy_path_drains_deletes_and_releases_the_slot_before_the_lea
     assert released_with_generation(ran)
 
 
+def test_scale_in_of_a_slot_routed_none_skips_the_drain_and_goes_straight_to_the_release():
+    """The surplus interim-warm standby never received traffic: routing none -> draining is not a valid transition, and there is nothing to drain."""
+    status, ran = run("scale_in", results={"cdr.scale_in_gate": py({"proceed": True, **SLOT, "routing_mode": "none", "metrics_source": "prometheus"})})
+    assert status == statuses.SUCCEEDED
+    order = names(ran)
+    assert not {"mark_draining", "drain", "route_off"} & set(order)
+    assert order.index("gate") < order.index("begin_release") < order.index("tf_delete") < order.index("delete") < order.index("release_slot") < order.index("release")
+    assert released_with_generation(ran)
+
+
 @pytest.mark.parametrize("reason", ["primary_outage", "metrics_stale", "warm_not_ready", "no_candidate", "maintenance"])
 def test_scale_in_refusals_are_noops_with_no_slot_or_provider_side_effect(reason):
     status, ran = run("scale_in", results={"cdr.scale_in_gate": py({"proceed": False, "noop_reason": reason})})

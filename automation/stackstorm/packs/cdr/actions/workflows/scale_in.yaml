@@ -15,6 +15,7 @@ vars:
   - slot_generation: 0
   - resource_id: ''
   - evidence: {}
+  - routing_mode: ''
 tasks:
   adapter:
     action: cdr.adapter_info
@@ -88,7 +89,8 @@ tasks:
           - slot_key: <% result().result.slot_key %>
           - slot_generation: <% result().result.slot_generation %>
           - resource_id: <% result().result.resource_id %>
-        do: mark_draining
+          - routing_mode: <% result().result.get('routing_mode', '') %>
+        do: routed_or_idle
       - when: <% succeeded() and not result().result.proceed %>
         publish:
           - noop_reason: <% result().result.noop_reason %>
@@ -97,6 +99,13 @@ tasks:
         publish:
           - error: <% result() %>
         do: fail_handler
+  routed_or_idle:
+    action: core.noop
+    next:
+      - when: <% succeeded() and ctx().routing_mode = 'none' %>
+        do: begin_release
+      - when: <% succeeded() and ctx().routing_mode != 'none' %>
+        do: mark_draining
   mark_draining:
     action: cdr.apply_routing
     input:
