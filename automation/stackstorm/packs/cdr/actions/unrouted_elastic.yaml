@@ -1,0 +1,10 @@
+---
+name: unrouted_elastic
+pack: cdr
+description: "Find a ready elastic VM that was never routed (routing_mode none) so scale_out joins it to HAProxy before provisioning another."
+runner_type: python-script
+entry_point: unrouted_elastic.py
+enabled: true
+parameters:
+  timeout: {type: integer, default: 60}
+  operation_id: {type: string, required: true}

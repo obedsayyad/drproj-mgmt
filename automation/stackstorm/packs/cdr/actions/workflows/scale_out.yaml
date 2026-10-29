@@ -78,7 +78,7 @@ tasks:
       message: <% 'capacity lease held at generation ' + str(ctx().generation) %>
     next:
       - when: <% succeeded() and not ctx().resume %>
-        do: gate
+        do: join_check
       # Reconcile re-dispatched an interrupted operation: continue in the slot it already holds (no new gate, pick or reserve).
       - when: <% succeeded() and ctx().resume %>
         do: resume_slot
@@ -103,6 +103,26 @@ tasks:
         publish:
           - noop_reason: resume_slot_missing
         do: noop_release
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  # A ready elastic VM that was never routed (a crash after 'ready', or created before this step existed) joins HAProxy first.
+  join_check:
+    action: cdr.unrouted_elastic
+    input:
+      operation_id: <% ctx().operation_id %>
+    next:
+      - when: <% succeeded() and result().result.found %>
+        publish:
+          - provider: <% result().result.provider %>
+          - slot_key: <% result().result.slot_key %>
+          - slot_generation: <% result().result.slot_generation %>
+          - resource_id: <% result().result.resource_id %>
+        do: route_elastic
+      - when: <% succeeded() and not result().result.found %>
+        do: gate
       - when: <% failed() %>
         publish:
           - error: <% result() %>
@@ -194,7 +214,8 @@ tasks:
           - provider: <% result().output.provider %>
           - slot_key: <% result().output.slot_key %>
           - resource_id: <% result().output.resource_id %>
-        do: back_to_running
+          - slot_generation: <% result().output.slot_generation %>
+        do: route_elastic
       - when: <% succeeded() and result().output.result = 'exhausted' %>
         do: fail_exhausted
       - when: <% succeeded() and result().output.result = 'uncertain' %>
@@ -202,6 +223,24 @@ tasks:
           - provider: <% result().output.provider %>
           - slot_key: <% result().output.slot_key %>
         do: raise_uncertain
+      - when: <% failed() %>
+        publish:
+          - error: <% result() %>
+        do: fail_handler
+
+  # Join HAProxy: ready is not serving. apply_routing validates under the lease, sends the Runtime API commands (assert_lease + intent row each)
+  # and projects routing_mode active only after they were applied.
+  route_elastic:
+    action: cdr.apply_routing
+    input:
+      operation_id: <% ctx().operation_id %>
+      lease_generation: <% ctx().generation %>
+      target: <% ctx().slot_key %>
+      mode: active
+      slot_generation: <% ctx().slot_generation %>
+    next:
+      - when: <% succeeded() %>
+        do: back_to_running
       - when: <% failed() %>
         publish:
           - error: <% result() %>
