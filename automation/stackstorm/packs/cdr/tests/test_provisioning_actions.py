@@ -197,9 +197,11 @@ class _RealLike:
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
+    version = None
+
     def check_ready(self, provider, resource_id, ip=None):
         self.ips.append(ip)
-        return {"state": "ready", "identity": resource_id} if ip else {"state": "unknown"}
+        return {"state": "ready", "identity": resource_id, "version": self.version} if ip else {"state": "unknown"}
 
 
 def test_wait_ready_real_adapter_probes_the_instance_address_and_takes_the_recorded_digest(db, sim, monkeypatch):
@@ -214,6 +216,26 @@ def test_wait_ready_real_adapter_probes_the_instance_address_and_takes_the_recor
     ok, out = make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.05)
     assert ok and out["result"] == "ready" and out["image_digest"] == "sha256:" + "b" * 64 and out["identity"] == rid
     assert real.ips == ["203.0.113.9"]
+
+
+def test_wait_ready_real_adapter_accepts_the_version_that_matches_the_primarys_digest_before_the_deploy_is_recorded(db, sim, monkeypatch):
+    import wait_ready
+
+    faults(sim, {"digitalocean": {"ready_after_s": 0}})
+    op, gen, key, sgen, rid = created(db, sim)
+    primary = "sha256:" + "c" * 64
+    db.execute("INSERT INTO ops.instances (provider, role, lifecycle_state, image_digest) VALUES ('self_hosted', 'primary', 'ready', %s)", (primary,))
+    db.execute("UPDATE ops.instances SET public_ip = '203.0.113.9' WHERE provider_resource_id = %s", (rid,))
+    real = _RealLike(SimulationAdapter(sim["dir"], None))
+    monkeypatch.setattr(wait_ready.providers, "load", lambda _cfg: real)
+    deadline, cps = deadlines(0.6, [0.6])
+    real.version = "d" * 12  # a different release: never admitted, the wait ends at the deadline
+    ok, out = make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.1)
+    assert ok and out["result"] == "deadline"
+    real.version = "c" * 12
+    deadline, cps = deadlines(30, [10])
+    ok, out = make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.05)
+    assert ok and out["result"] == "ready" and out["image_digest"] == primary
 
 
 def test_run_heavy_asserts_the_lease_before_deploying(db, sim):

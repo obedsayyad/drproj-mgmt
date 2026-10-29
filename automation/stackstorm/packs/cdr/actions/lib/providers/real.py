@@ -207,5 +207,5 @@ class RealAdapter(ProviderAdapter):
         except (requests.RequestException, ValueError):
             return {"state": "unknown"}
         if r.status_code == 200 and body.get("status") == "ready":
-            return {"state": "ready", "identity": body.get("instance_id")}
+            return {"state": "ready", "identity": body.get("instance_id"), "version": body.get("version")}
         return {"state": "not_ready" if r.status_code == 503 else "unknown"}

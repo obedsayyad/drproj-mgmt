@@ -33,6 +33,12 @@ class WaitReady(Action):
         checkpoints = [_ts(c) for c in checkpoints_at]
         emitted = 0
         last = "not_ready"
+        pinned = None
+        if not adapter.simulated:
+            ok, rows = call(self.config, "SELECT image_digest FROM ops.instances WHERE role = 'primary' AND image_digest IS NOT NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 1", ())
+            if not ok:
+                return False, rows
+            pinned = rows[0][0] if rows else None
         with LeaseKeeper(self.config, operation_id, lease_generation, coordination["lease_renewal_seconds"]) as keeper:
             while True:
                 keeper.check()
@@ -48,6 +54,11 @@ class WaitReady(Action):
                     ip, digest = (rows[0][0] or "").split("/")[0], rows[0][1] if rows else None
                     check = adapter.check_ready(provider, resource_id, ip=ip or None)
                     if check["state"] == "ready":
+                        # the deploy's digest is recorded on the instance only after this action returns, so the readiness body's short `version`
+                        # (the first 12 hex characters of the image digest) is accepted when it matches the primary's pinned digest
+                        version = str(check.get("version") or "")
+                        if not digest and pinned and len(version) >= 12 and pinned.startswith("sha256:" + version):
+                            digest = pinned
                         check = {**check, "image_digest": digest}
                 last = check["state"]
                 if last == "ready" and check.get("image_digest") and check.get("identity"):
