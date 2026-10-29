@@ -40,13 +40,13 @@
     mode: "0600"
   no_log: true
 
-- name: Copy the deployment inputs next to the compose files (mounted into the runner; mode 0600, gitignored)
+- name: Copy the deployment inputs next to the compose files (mounted into the runner, which reads the references as uid st2; mode 0600, gitignored)
   ansible.builtin.copy:
     src: "{{ inputs_file }}"
     remote_src: true
     dest: "{{ mgmt_src }}/deploy/inputs/deployment-inputs.local.json"
-    owner: root
-    group: root
+    owner: "{{ mgmt_st2_uid }}"
+    group: "{{ mgmt_st2_gid }}"
     mode: "0600"
 
 - name: Create the Prometheus target directories
