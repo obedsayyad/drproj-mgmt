@@ -10,6 +10,8 @@ Read `docs/CLAUDE.md` (the full implementation brief) first. Commands are in `RE
 
 Terraform/runner checks (Docker only; never `init`/`plan`/`apply` against a real provider): from `infra/terraform`, `docker run --rm -v $PWD:/w -w /w[/slot-do|/slot-linode|/modules/<m>] hashicorp/terraform:1.17.0 fmt -recursive -check | init -backend=false && validate | test`; `docker run --rm -v $PWD:/data -w /data ghcr.io/terraform-linters/tflint:v0.55.1 --recursive`; `docker run --rm -v $PWD:/code -w /code bats/bats:1.11.1 tests/infra`; runner image: `docker build --platform linux/amd64 -f automation/runner/Dockerfile -t drproj-runner:local .`. Terraform runs go through `scripts/tf-slot.sh`. Pack tests (P5.2): `python:3.10` with `psycopg[binary]==3.3.6 requests==2.32.3 pyyaml responses==0.25.3 jsonschema pytest` plus Orquesta (see the pack README), `TEST_DATABASE_URL` and `KEEPALIVE_TEST_URL` set, `python -m pytest tests -q -rs` in `automation/stackstorm/packs/cdr` (0 skips); `docker run --rm -v $PWD:/mnt koalaman/shellcheck:stable scripts/tf-slot.sh`.
 
+Fixed-VM SSH: root with ~/.ssh/drproj; management is the Ansible controller at /opt/drproj/ansible. (Never use `ssh_cancel_command`; it drops the session. Keep `ssh_exec` short, with a timeout.)
+
 ## Project
 
 College demonstration of cloud compute allocation and disaster recovery for a sample disaster-relief request app. HAProxy routes app traffic to healthy servers; StackStorm orchestrates failover, scaling, and reconciliation; Terraform provisions elastic cloud VMs; Ansible configures machines and deploys Docker Compose stacks; Supabase Free PostgreSQL holds app and ops data; Prometheus/Grafana monitor; k6 load-tests.
