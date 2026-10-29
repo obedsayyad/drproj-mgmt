@@ -369,6 +369,23 @@ def test_the_runner_environment_carries_only_the_active_providers_token(env):
     assert li_env["LINODE_TOKEN"] == LI_TOKEN and "DIGITALOCEAN_TOKEN" not in li_env and DO_TOKEN not in li_env.values()
 
 
+def test_state_files_are_tightened_to_0600_and_directories_to_0700_after_every_run(env, tmp_path):
+    import stat
+    from providers.tf_runner import TfRunner
+
+    slot = tmp_path / "st" / "digitalocean" / "warm"
+    (slot / "backups").mkdir(parents=True)
+    for f in (slot / "terraform.tfstate", slot / "terraform.tfstate.backup", slot / "backups" / "x.tfstate"):
+        f.write_text("{}")
+        f.chmod(0o755)  # what Terraform leaves behind under umask 077
+    (slot / "backups").chmod(0o755)
+    TfRunner(SCRIPT, str(tmp_path / "st"), {}).tighten("digitalocean", "warm")
+    mode = lambda p: stat.S_IMODE(p.stat().st_mode)
+    assert mode(slot / "terraform.tfstate") == 0o600 and mode(slot / "terraform.tfstate.backup") == 0o600
+    assert mode(slot / "backups" / "x.tfstate") == 0o600 and mode(slot / "backups") == 0o700
+    TfRunner(SCRIPT, str(tmp_path / "st"), {}).tighten("linode", "warm")  # a slot that was never created is not an error
+
+
 # ------------------------------------------------------------------ absence evidence (release_slot in real mode)
 def prove(env, *, state_has_resource=False):
     adapter = RealAdapter(env["cfg"])

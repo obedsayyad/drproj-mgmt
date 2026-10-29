@@ -60,6 +60,20 @@ class TfRunner:
             return None, APPLY_STARTED in err, ""
         except OSError:
             return 127, False, ""
+        finally:
+            self.tighten(provider, slot)
+
+    def tighten(self, provider, slot):
+        """Terraform creates state files executable (0777 & ~umask = 0700); docs/09 wants state files 0600 and directories 0700."""
+        base = os.path.join(self.state_dir, provider, slot)
+        for root, dirs, files in os.walk(base):
+            try:
+                for d in dirs:
+                    os.chmod(os.path.join(root, d), 0o700)
+                for f in files:
+                    os.chmod(os.path.join(root, f), 0o600)
+            except OSError:
+                return  # best effort: a permissions problem must not turn a finished apply into a different failure
 
     # ---- state files (read directly; terraform is not run)
     def _state_ids(self, path):
