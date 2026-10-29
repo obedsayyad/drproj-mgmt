@@ -171,9 +171,13 @@ def test_activate_standby_routes_the_warm_server_only_after_the_gate_passes():
     assert [r for r in ran if r[0] == "noop_release"][0][2]["outcome"]["noop_reason"] == "no_warm_standby"
 
 
-def test_activate_standby_takes_the_lease_once_and_a_live_holder_is_a_noop():
-    status, ran = run("activate_standby", results={"cdr.acquire_lease": py({"acquired": False})})
+def test_activate_standby_waits_for_the_lease_and_a_lease_that_never_frees_is_a_noop():
+    """It queues behind the holder (the 60 s reconcile holds the lease ~25 s; a no-op there left the overload unrelieved, found live in P6.3)."""
+    status, ran = run("activate_standby")
+    assert [r[1] for r in ran].count("cdr.wait_lease") == 1 and "cdr.acquire_lease" not in [r[1] for r in ran]
+    status, ran = run("activate_standby", results={"cdr.wait_lease": py({"acquired": False, "reason": "timeout"})})
     assert names(ran)[-1] == "noop_no_lease" and "gate" not in names(ran) and not any(r[1] == "cdr.release_lease" for r in ran)
+    assert [r for r in ran if r[0] == "noop_no_lease"][0][2]["outcome"]["noop_reason"] == "lease_timeout"
 
 
 # ------------------------------------------------------------------ reconcile

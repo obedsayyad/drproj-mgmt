@@ -41,7 +41,7 @@ tasks:
           - error: <% result() %>
         do: fail_handler
   acquire:
-    action: cdr.acquire_lease
+    action: cdr.wait_lease
     input:
       operation_id: <% ctx().operation_id %>
       app_key: <% ctx().app_key %>
@@ -52,7 +52,7 @@ tasks:
         do: step_lease
       - when: <% succeeded() and not result().result.acquired %>
         publish:
-          - noop_reason: lease_held
+          - noop_reason: <% 'lease_' + result().result.reason %>
         do: noop_no_lease
       - when: <% failed() %>
         publish:
