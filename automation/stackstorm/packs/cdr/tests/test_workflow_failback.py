@@ -59,7 +59,7 @@ def test_a_primary_that_does_not_come_up_after_ready_is_taken_back_to_weight_zer
 
 
 def test_a_lease_held_by_another_operation_does_nothing():
-    status, ran = drive("failback", INPUT, {**REAL, "cdr.acquire_lease": py({"acquired": False})})
+    status, ran = drive("failback", INPUT, {**REAL, "cdr.wait_lease": py({"acquired": False, "reason": "timeout"})})
     assert names(ran) == ["adapter", "start", "acquire", "noop_no_lease"] and routing(ran) == []
 
 
