@@ -2,11 +2,17 @@
 Simulation adapter: the HAProxy view is the simulation's routing map. Real adapter: HAProxy `show servers state` must show the slot's
 backup line (warm_bk / iwarm_bk) UP and ready, the relief /health/ready answers ready from the instance's identity, and the instance's
 recorded image_digest equals the primary's. verified=false lists which check failed."""
+import time
+
 import providers
 from cdr_common import guarded
 from cdr_db import call
 from haproxy_routing import lines_for_slot
 from st2common.runners.base_action import Action
+
+
+UP_WAIT_SECONDS = 45
+UP_POLL_SECONDS = 3
 
 
 class StandbyVerify(Action):
@@ -37,7 +43,15 @@ class StandbyVerify(Action):
         pinned = rows[0][0] if rows else None
         check = adapter.check_ready(provider, resource_id, ip=ip)
         bk, _ = lines_for_slot(slot_key)
-        server = adapter.membership().servers.get(bk) if bk else None
+        # A backup server that was just pointed at the instance is DOWN until HAProxy's own health checks pass (rise x inter): give it a bounded
+        # time instead of failing the repair on the first look.
+        waited = 0
+        while True:
+            server = adapter.membership().servers.get(bk) if bk else None
+            if (server is not None and server.is_up) or waited >= UP_WAIT_SECONDS:
+                break
+            time.sleep(UP_POLL_SECONDS)
+            waited += UP_POLL_SECONDS
         checks = {
             "ready": check["state"] == "ready",
             "digest_matches": pinned is not None and digest == pinned,

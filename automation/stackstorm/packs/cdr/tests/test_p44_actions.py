@@ -208,6 +208,44 @@ def test_verify_needs_ready_digest_and_backup_routing(db, sim, tmp_path):
     assert run()["checks"]["ready"] is False
 
 
+def test_verify_real_waits_for_haproxy_to_mark_the_backup_up(db, sim, tmp_path, monkeypatch):
+    import standby_verify
+
+    key, rid = deployed_warm(db, sim, tmp_path)
+    digest = "sha256:" + "e" * 64
+    db.execute("INSERT INTO ops.instances (provider, role, lifecycle_state, image_digest) VALUES ('self_hosted', 'primary', 'ready', %s)", (digest,))
+    db.execute("UPDATE ops.instances SET image_digest = %s, lifecycle_state = 'ready', routing_mode = 'backup', public_ip = '203.0.113.9' WHERE slot_key = 'warm'", (digest,))
+    looks = []
+
+    class Server:
+        def __init__(self, up):
+            self.is_up = up
+
+    class Members:
+        def __init__(self, up):
+            self.servers = {"warm_bk": Server(up)}
+
+    class Adapter:
+        simulated = False
+        mode = "real"
+
+        def check_ready(self, provider, resource_id, ip=None):
+            return {"state": "ready"} if ip else {"state": "unknown"}
+
+        def membership(self):
+            looks.append(1)
+            return Members(len(looks) >= 3)  # DOWN on the first two looks, UP on the third
+
+    monkeypatch.setattr(standby_verify.providers, "load", lambda _cfg: Adapter())
+    monkeypatch.setattr(standby_verify.time, "sleep", lambda _s: None)
+    out = make(StandbyVerify, tmp_path).run(new_op(db, "standby_repair"), 0, key, "digitalocean", rid)[1]
+    assert out["verified"] is True and len(looks) == 3
+    looks.clear()
+    monkeypatch.setattr(Adapter, "membership", lambda self: (looks.append(1), Members(False))[1])
+    out = make(StandbyVerify, tmp_path).run(new_op(db, "standby_repair"), 0, key, "digitalocean", rid)[1]
+    assert out["verified"] is False and out["checks"]["routing_backup"] is False and len(looks) == standby_verify.UP_WAIT_SECONDS // standby_verify.UP_POLL_SECONDS + 1
+
+
 # ------------------------------------------------------------------ simulation producer of standby.unhealthy
 class RunApi:
     def __init__(self):
