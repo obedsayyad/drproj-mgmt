@@ -103,6 +103,14 @@
   changed_when: true
   when: mgmt_key_created | bool
 
+# A bind-mounted file that was replaced (new inode) is invisible to the running container: recreate the runner after the cloud VM key was installed.
+- name: Recreate the runner so it sees the cloud VM key
+  ansible.builtin.command: "{{ mgmt_compose }} up -d --force-recreate --no-deps --wait st2actionrunner"
+  args:
+    chdir: "{{ mgmt_compose_dir }}"
+  changed_when: true
+  when: mgmt_cloud_key_installed is changed
+
 # The 60 s reconcile timer stays off until provider tokens exist (docs/15 §8); the 6 h keep-alive timer stays on.
 # Once providers.env exists the rule's state is the operator's (enabled after a successful manual reconcile), so a rerun leaves it alone.
 - name: Disable the 60 s reconcile rule (only while no provider tokens are installed)
