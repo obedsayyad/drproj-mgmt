@@ -27,7 +27,8 @@ def parse_scrape_time(value):
         off += ":00"
     elif len(off) == 5:
         off = off[:3] + ":" + off[3:]
-    return datetime.fromisoformat(m.group(1) + (m.group(2) or "")[:7] + off)
+    frac = (m.group(2) or "")[1:7].ljust(6, "0") if m.group(2) else ""  # py3.10 fromisoformat wants exactly 3 or 6 fraction digits
+    return datetime.fromisoformat(m.group(1) + ("." + frac if frac else "") + off)
 
 
 def prometheus_fresh(url, jobs, stale_after):

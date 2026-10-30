@@ -4,7 +4,7 @@
 # argv is appended to "argv" and the secret-bearing env names that reached the process to "env", both next to this script.
 here=$(dirname "$0")
 echo "$*" >> "$here/argv"
-env | sed -n 's/^\(DR_AUTOMATION_URL\|NODE_EXPORTER_BASIC_AUTH_PASSWORD\|SUPABASE_APP_URL\|ANSIBLE_[A-Z_]*\|CLOUD_VM_SSH_KEY_FILE\|DIGITALOCEAN_TOKEN\|LINODE_TOKEN\)=.*/\1/p' | sort > "$here/env"
+env | sed -n 's/^\(DR_AUTOMATION_URL\|NODE_EXPORTER_BASIC_AUTH_PASSWORD\|SUPABASE_APP_URL\|ANSIBLE_[A-Z_]*\|CLOUD_VM_SSH_KEY_FILE\|CLOUD_APP_INPUTS_FILE\|DIGITALOCEAN_TOKEN\|LINODE_TOKEN\)=.*/\1/p' | sort > "$here/env"
 mode() { grep -qx "$1" "$here/mode" 2>/dev/null; }
 value() { sed -n "s/^$1=//p" "$here/mode" 2>/dev/null | head -n 1; }
 limit=

@@ -310,7 +310,7 @@ def test_backup_mode_points_the_pre_declared_line_at_the_instance_before_enablin
     declared = membership({**base_servers(), "warm_bk": ["0.0.0.0", 8443, 0, MAINT, 100]})
     assert hr.plan_slot("warm", "backup", declared, ip="10.0.0.7") == [
         "set server be_app/warm_bk addr 10.0.0.7 port 8443\n", "set server be_app/warm_bk state ready\n"]
-    assert hr.plan_slot("warm", "backup", declared) == ["set server be_app/warm_bk state ready\n"]  # no address known: state only, as before
+    assert hr.plan_slot("warm", "backup", declared) == []  # no address known: an unbound line is never made ready
     already = membership({**base_servers(), "warm_bk": ["10.0.0.7", 8443, 2, 0, 100]})
     assert hr.plan_slot("warm", "backup", already, ip="10.0.0.7") == []
 
