@@ -204,38 +204,57 @@ class _RealLike:
         return {"state": "ready", "identity": resource_id, "version": self.version} if ip else {"state": "unknown"}
 
 
-def test_wait_ready_real_adapter_probes_the_instance_address_and_takes_the_recorded_digest(db, sim, monkeypatch):
+def _inputs(sim, tmp_path, digest="sha256:" + "c" * 64, body=None):
+    """Point the action's ansible.inputs_path at a deployment-inputs file on the 'controller'."""
+    path = tmp_path / "deployment-inputs.json"
+    if body is not False:
+        path.write_text(json.dumps(body if body is not None else {"registry": {"application_image_digest": digest}}))
+    return {"ansible": {"playbook_dir": str(tmp_path), "inputs_path": str(path), "ssh_key_path": "/run/secrets/k"}}
+
+
+def _real_wait(db, sim, monkeypatch, version):
     import wait_ready
 
     faults(sim, {"digitalocean": {"ready_after_s": 0}})
     op, gen, key, sgen, rid = created(db, sim)
-    db.execute("UPDATE ops.instances SET public_ip = '203.0.113.9/32', image_digest = 'sha256:" + "b" * 64 + "' WHERE provider_resource_id = %s", (rid,))
+    db.execute("UPDATE ops.instances SET public_ip = '203.0.113.9/32' WHERE provider_resource_id = %s", (rid,))
     real = _RealLike(SimulationAdapter(sim["dir"], None))
+    real.version = version
     monkeypatch.setattr(wait_ready.providers, "load", lambda _cfg: real)
+    return op, gen, rid, real
+
+
+def test_wait_ready_real_adapter_is_ready_when_the_reported_version_matches_the_inputs_digest(db, sim, monkeypatch, tmp_path):
+    digest = "sha256:" + "c" * 64
+    cfg = _inputs(sim, tmp_path, digest)
+    op, gen, rid, real = _real_wait(db, sim, monkeypatch, "c" * 12)
+    # a stale recorded row digest (and a different primary row) must not matter: the inputs file is the source of truth
+    db.execute("UPDATE ops.instances SET image_digest = %s WHERE provider_resource_id = %s", ("sha256:" + "b" * 64, rid))
     deadline, cps = deadlines(30, [10, 20, 30])
-    ok, out = make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.05)
-    assert ok and out["result"] == "ready" and out["image_digest"] == "sha256:" + "b" * 64 and out["identity"] == rid
+    ok, out = make(WaitReady, sim, **cfg).run(op, gen, "digitalocean", rid, deadline, cps, 0.05)
+    assert ok and out["result"] == "ready" and out["image_digest"] == digest and out["identity"] == rid
     assert real.ips == ["203.0.113.9"]
 
 
-def test_wait_ready_real_adapter_accepts_the_version_that_matches_the_primarys_digest_before_the_deploy_is_recorded(db, sim, monkeypatch):
-    import wait_ready
-
-    faults(sim, {"digitalocean": {"ready_after_s": 0}})
-    op, gen, key, sgen, rid = created(db, sim)
-    primary = "sha256:" + "c" * 64
-    db.execute("INSERT INTO ops.instances (provider, role, lifecycle_state, image_digest) VALUES ('self_hosted', 'primary', 'ready', %s)", (primary,))
-    db.execute("UPDATE ops.instances SET public_ip = '203.0.113.9' WHERE provider_resource_id = %s", (rid,))
-    real = _RealLike(SimulationAdapter(sim["dir"], None))
-    monkeypatch.setattr(wait_ready.providers, "load", lambda _cfg: real)
+def test_wait_ready_real_adapter_reports_digest_mismatch_and_is_never_ready(db, sim, monkeypatch, tmp_path):
+    cfg = _inputs(sim, tmp_path)
+    op, gen, rid, real = _real_wait(db, sim, monkeypatch, "d" * 12)
     deadline, cps = deadlines(0.6, [0.6])
-    real.version = "d" * 12  # a different release: never admitted, the wait ends at the deadline
-    ok, out = make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.1)
-    assert ok and out["result"] == "deadline"
-    real.version = "c" * 12
+    ok, out = make(WaitReady, sim, **cfg).run(op, gen, "digitalocean", rid, deadline, cps, 0.1)
+    assert ok and out["result"] == "deadline" and out["code"] == "digest_mismatch"
+    real.version = None  # a body without a version cannot prove the release either
+    deadline, cps = deadlines(0.4, [0.4])
+    ok, out = make(WaitReady, sim, **cfg).run(op, gen, "digitalocean", rid, deadline, cps, 0.1)
+    assert ok and out["result"] == "deadline" and out["code"] == "digest_mismatch"
+
+
+def test_wait_ready_real_adapter_errors_when_the_inputs_file_is_unusable(db, sim, monkeypatch, tmp_path):
+    op, gen, rid, real = _real_wait(db, sim, monkeypatch, "c" * 12)
     deadline, cps = deadlines(30, [10])
-    ok, out = make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.05)
-    assert ok and out["result"] == "ready" and out["image_digest"] == primary
+    for body in (False, {}, {"registry": {}}, {"registry": {"application_image_digest": "latest"}}):
+        assert make(WaitReady, sim, **_inputs(sim, tmp_path, body=body)).run(op, gen, "digitalocean", rid, deadline, cps, 0.05) == (False, "inputs_unavailable")
+    assert make(WaitReady, sim).run(op, gen, "digitalocean", rid, deadline, cps, 0.05) == (False, "inputs_unavailable")
+    assert real.ips == []
 
 
 def test_run_heavy_asserts_the_lease_before_deploying(db, sim):

@@ -3,7 +3,7 @@ import { Code, HttpProblem } from './problem.js';
 
 /** Newest ops migration this build needs (name as in ops.schema_migrations). tests/integration/schema-revision.test.ts fails when it
  *  differs from the newest file in drproj-app, so a new migration cannot ship without bumping it here. */
-export const EXPECTED_OPS_SCHEMA_REVISION = '0017_test_run_projection.sql';
+export const EXPECTED_OPS_SCHEMA_REVISION = '0018_record_instance_deploy.sql';
 
 export interface SchemaRevision {
   applied: string | null;

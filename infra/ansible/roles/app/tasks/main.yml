@@ -178,6 +178,32 @@
     quiet: true
   tags: [app, verify]
 
+- name: Fingerprint the rendered Compose file (the recorded configuration revision)
+  ansible.builtin.stat:
+    path: "{{ app_dir }}/compose.yaml"
+    checksum_algorithm: sha256
+  become: true
+  register: app_compose_stat
+  tags: [app, verify]
+
+# The canonical digest is what Docker reports for the image the container runs (RepoDigests[0]), so ops.instances cannot drift from it.
+# Skipped only for ':local' images, which have none. Runs for fixed hosts and cloud VMs alike; a failed call fails the deploy.
+- name: Record the deploy in ops.instances (ops.record_instance_deploy)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/record_deploy.py"
+      - "{{ app_instance_id }}"
+      - "{{ app_image_info.images[0].RepoDigests[0] | regex_replace('^.*@', '') }}"
+      - "{{ app_ready.json.version | default(app_version) }}"
+      - "sha256:{{ app_compose_stat.stat.checksum }}"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  when: app_image_info.images[0].RepoDigests | default([]) | length > 0
+  tags: [app, verify]
+
 - name: Report readiness facts to the caller
   ansible.builtin.set_stats:
     data:

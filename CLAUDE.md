@@ -10,6 +10,8 @@ Read `docs/CLAUDE.md` (the full implementation brief) first. Commands are in `RE
 
 Terraform/runner checks (Docker only; never `init`/`plan`/`apply` against a real provider): from `infra/terraform`, `docker run --rm -v $PWD:/w -w /w[/slot-do|/slot-linode|/modules/<m>] hashicorp/terraform:1.17.0 fmt -recursive -check | init -backend=false && validate | test`; `docker run --rm -v $PWD:/data -w /data ghcr.io/terraform-linters/tflint:v0.55.1 --recursive`; `docker run --rm -v $PWD:/code -w /code bats/bats:1.11.1 tests/infra`; runner image: `docker build --platform linux/amd64 -f automation/runner/Dockerfile -t drproj-runner:local .`. Terraform runs go through `scripts/tf-slot.sh`. Pack tests (P5.2): `python:3.10` with `psycopg[binary]==3.3.6 requests==2.32.3 pyyaml responses==0.25.3 jsonschema pytest` plus Orquesta (see the pack README), `TEST_DATABASE_URL` and `KEEPALIVE_TEST_URL` set, `python -m pytest tests -q -rs` in `automation/stackstorm/packs/cdr` (0 skips); `docker run --rm -v $PWD:/mnt koalaman/shellcheck:stable scripts/tf-slot.sh`.
 
+st2 CLI on management (there is no st2client container): password in /etc/drproj/mgmt/secrets/st2admin.pw (also st2_api_key, st2-htpasswd, st2.user.conf there). Run `docker exec -e P="$(cat st2admin.pw)" drproj-mgmt-st2api-1 sh -c 'export ST2_AUTH_URL=http://st2auth:9100; st2 login st2admin -p "$P"; st2 run cdr.<action> k=v'` (auth is a separate container, so ST2_AUTH_URL is required). Open incidents: `docker exec drproj-mgmt-ops-1 wget -qO- http://127.0.0.1:8080/api/incidents` (fingerprint feeds cdr.resolve_incident). Never print the password.
+
 Fixed-VM SSH: root with ~/.ssh/drproj; management is the Ansible controller at /opt/drproj/ansible. (Never use `ssh_cancel_command`; it drops the session. Keep `ssh_exec` short, with a timeout.)
 
 ## Project
@@ -52,3 +54,7 @@ NEXT: <what you'd do next if told "continue", 1 line>
 ```
 
 Rules: never paste diffs/logs; refer to files by path. If a doc in `docs/` conflicts with `CLAUDE.md`, say so in `DECISIONS`, don't resolve it silently.
+
+## Process rule
+
+On receiving a task prompt, first append it verbatim to `/Users/obedsayyad/Documents/collageDRproject/_plans/TASKS.md` (gitignored at root), and read that file after any `/clear` before asking for re-pastes.
