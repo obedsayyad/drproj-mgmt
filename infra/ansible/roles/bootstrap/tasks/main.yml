@@ -308,9 +308,9 @@
       ansible.builtin.apt:
         name: [python3-venv, python3-pip, rsync]
         state: present
-    - name: Create the venv and install the pinned ansible-core
+    - name: Create the venv and install the pinned ansible-core (psycopg is for inventory/cloud_app.py and the app role's record_deploy.py)
       ansible.builtin.pip:
-        name: "ansible-core=={{ bootstrap_ansible_core_version }}"
+        name: ["ansible-core=={{ bootstrap_ansible_core_version }}", "psycopg[binary]==3.3.6"]
         virtualenv: "{{ bootstrap_ansible_venv }}"
         virtualenv_command: python3 -m venv
     - name: Install the pinned collections (infra/ansible/requirements.yml mirrors automation/runner/requirements.yml)
